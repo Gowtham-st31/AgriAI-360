@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Market Price</title>
+    <link rel="stylesheet" href="/styles.css">
+
+    <style>
+        .market-card {
+            background: #e8fff0;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 15px;
+            border-left: 6px solid #2f8f46;
+        }
+
+        .sort-btn {
+            padding: 10px 14px;
+            background: #0a7cff;
+            border: none;
+            color: white;
+            border-radius: 6px;
+            margin-right: 8px;
+            cursor: pointer;
+            font-size: 15px;
+        }
+
+        .input-box {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+        }
+
+        .btn-green {
+            padding: 12px;
+            width: 100%;
+            background: #1a8f46;
+            border: none;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 17px;
+        }
+    </style>
+</head>
+
+<body>
+<script src="/theme.js"></script>
+
+<div id="site-header"></div>
+<script src="/header.js"></script>
+
+<div class="page-box">
+
+    <h2 class="text-center" data-i18n="market.title">Check Market Price</h2>
+
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+            <div style="flex:1;min-width:220px;">
+                <input id="commodityInput" placeholder="Enter commodity (Tomato, Banana, Onion...)" class="input-box" data-i18n="search.placeholder">
+            </div>
+            <div style="min-width:160px;">
+                <button id="get-price-btn" onclick="getPrice()" class="btn-green" data-i18n="market.get">Get Prices</button>
+            </div>
+        </div>
+
+    <br><br>
+
+    <div>
+        <button class="sort-btn" onclick="sortData('high')" data-i18n="market.sort.high">Highest Price</button>
+        <button class="sort-btn" onclick="sortData('low')" data-i18n="market.sort.low">Lowest Price</button>
+        <button class="sort-btn" onclick="sortNearest()" data-i18n="market.sort.near">Nearest Market</button>
+    </div>
+
+    <h3 style="margin-top:20px;" data-i18n="market.data">Market Data</h3>
+    <div id="resultBox"></div>
+
+    <hr style="margin:24px 0">
+    <!-- Marketplace listings removed -->
+
+</div>
+
+<script>
+let MARKET_DATA = [];
+
+// 🔥 FIXED WORKING PRICE FETCH
+function getPrice() {
+    const raw = document.getElementById("commodityInput").value.trim();
+    const c = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(raw) : raw;
+    if (!c) {
+        alert("Enter a commodity name!");
+        return;
+    }
+
+    document.getElementById("resultBox").innerHTML = "<p>Loading...</p>";
+
+    fetch(`/price?commodity=${encodeURIComponent(c)}`)
+        .then(res => res.json())
+        .then(data => {
+            if (!data.success) {
+                document.getElementById("resultBox").innerHTML =
+                    `<p style='color:red;'>${data.msg || "Could not load data"}</p>`;
+                return;
+            }
+
+            MARKET_DATA = data.data;
+            displayResults(MARKET_DATA);
+        })
+        .catch(err => {
+            document.getElementById("resultBox").innerHTML =
+                "<p style='color:red;'>Could not connect to server</p>";
+        });
+}
+
+// Display market cards
+function displayResults(data) {
+    let html = "";
+    if (data.length === 0) {
+        html = "<p>No data available for this commodity.</p>";
+    }
+
+    data.forEach(m => {
+        html += `
+        <div class="market-card">
+            <p data-label="market"><b class="label">${window.__t('label.market') || 'Market:'}</b> <span class="value">${m.market}</span></p>
+            <p data-label="district"><b class="label">${window.__t('label.district') || 'District:'}</b> <span class="value">${m.district}</span></p>
+            <p data-label="state"><b class="label">${window.__t('label.state') || 'State:'}</b> <span class="value">${m.state}</span></p>
+
+            <p data-label="variety"><b class="label">${window.__t('label.variety') || 'Variety:'}</b> <span class="value">${m.variety || "Not Available"}</span></p>
+            <p data-label="grade"><b class="label">${window.__t('label.grade') || 'Grade:'}</b> <span class="value">${m.grade || "Not Available"}</span></p>
+
+            <p data-label="min_price"><b class="label">${window.__t('label.min_price') || 'Min Price:'}</b> ₹<span class="value">${m.min_price}</span> / 100kg</p>
+            <p data-label="max_price"><b class="label">${window.__t('label.max_price') || 'Max Price:'}</b> ₹<span class="value">${m.max_price}</span> / 100kg</p>
+            <p data-label="modal_price"><b class="label">${window.__t('label.modal_price') || 'Modal Price:'}</b> ₹<span class="value">${m.modal_price}</span> / 100kg</p>
+
+            <p data-label="date"><b class="label">${window.__t('label.date') || 'Date:'}</b> <span class="value">${m.arrival_date}</span></p>
+        </div>`;
+    });
+
+    document.getElementById("resultBox").innerHTML = html;
+    // Apply translations for dynamic labels if available
+    try{ if(typeof ensureI18nLoaded === 'function') ensureI18nLoaded(function(){ try{ if(typeof applyTranslations === 'function') applyTranslations(); }catch(e){} }); }catch(e){}
+}
+
+// marketplace UI removed
+
+// Sorting
+function sortData(type) {
+    if (type === "high") MARKET_DATA.sort((a, b) => b.modal_price - a.modal_price);
+    else MARKET_DATA.sort((a, b) => a.modal_price - b.modal_price);
+    displayResults(MARKET_DATA);
+}
+</script>
+
+</body>
+</html>

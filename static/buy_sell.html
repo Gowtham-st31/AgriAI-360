@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Buy / Sell (Premium)</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .page-box { max-width: 720px; margin: 40px auto; padding: 28px; }
+    .orders { margin-top: 20px; }
+    .order { background: #f7fdf7; border: 1px solid #e6f3e6; padding: 12px; margin-bottom: 8px; border-radius: 6px; }
+    .muted { color: #666; font-size: 0.9em }
+    .premium-badge { display:inline-block; background:#ffd700; padding:4px 8px; border-radius:6px; margin-left:8px }
+    label { display:block; margin-top:10px }
+    input, select { width:100%; padding:8px; margin-top:6px }
+    button { margin-top:12px; padding:10px 14px }
+  </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+  <div class="navbar">🌿 Farmer Assistant <span class="premium-badge">Premium</span></div>
+
+  <div class="page-box">
+    <h2>Buy / Sell Marketplace</h2>
+    <p class="sub-text">Place buy or sell orders for farm produce. This is a premium feature — you must be logged in.</p>
+
+    <div id="notice" class="muted"></div>
+
+    <div id="form">
+      <label>Type</label>
+      <select id="type">
+        <option value="sell">Sell</option>
+        <option value="buy">Buy</option>
+      </select>
+
+      <label>Product</label>
+      <select id="product_select" style="width:100%;padding:8px;margin-top:6px;border-radius:6px;border:1px solid #ccc">
+        <option value="">-- Choose product --</option>
+      </select>
+      <div style="margin-top:8px"><small class="muted">If product not listed, type below</small></div>
+      <input id="product" placeholder="Or type product name (e.g., Tomato, Onion)" style="width:100%;padding:8px;margin-top:6px;border-radius:6px;border:1px solid #ccc">
+
+      <label>Quantity (kg)</label>
+      <input id="quantity" type="number" min="1" value="100">
+
+      <label>Price per kg (₹)</label>
+      <input id="price" type="number" min="0" step="0.01" value="10.00">
+
+      <button id="place">Place Order</button>
+    </div>
+
+    <h3>Your Orders</h3>
+    <div id="orders" class="orders">
+      <div class="muted">Loading...</div>
+    </div>
+
+    <hr style="margin:20px 0">
+
+    <h3>Available Products (Public View)</h3>
+    <p class="muted">All visitors can see aggregated available quantities for each product.</p>
+    <div style="display:flex;gap:12px;margin-top:8px;">
+      <input id="bs_search" placeholder="Search products (tomato)" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ccc">
+      <button id="bs_search_btn" style="padding:8px 12px">Search</button>
+    </div>
+    <div id="available_products" style="margin-top:16px"></div>
+  </div>
+
+<script>
+async function api(path, opts) {
+  const res = await fetch(path, Object.assign({credentials: 'include', headers: {'Content-Type':'application/json'}}, opts));
+  try { return await res.json(); } catch(e){ return {success:false, message:'Invalid JSON response'} }
+}
+
+async function loadOrders(){
+  const r = await api('/api/orders');
+  const box = document.getElementById('orders');
+  box.innerHTML = '';
+  if(!r.success){
+    document.getElementById('notice').innerText = 'Failed to load orders: ' + (r.message||'');
+    return;
+  }
+  const orders = r.orders || [];
+  if(!orders.length){ box.innerHTML = '<div class="muted">No orders yet.</div>'; return }
+  orders.reverse().forEach(o => {
+    const d = new Date(o.timestamp*1000 || o.id);
+    const el = document.createElement('div'); el.className='order';
+    el.innerHTML = `<strong>${o.type.toUpperCase()}</strong> • ${o.product} • ${o.quantity} kg • ₹${o.price} <div class="muted">Placed: ${d.toLocaleString()}</div>`;
+    box.appendChild(el);
+  });
+}
+
+// Public aggregated available products (sum of SELL quantities by product)
+async function loadAvailableProducts(q) {
+  const term = (q===undefined)? document.getElementById('bs_search').value.trim() : q;
+  const box = document.getElementById('available_products');
+  box.innerHTML = '<div class="muted">Loading available products...</div>';
+    try{
+    let url = '/api/marketplace';
+    if(term){
+      if((term||'').toString().toLowerCase() === 'deals') url += '?q=deals&today=true';
+      else url += '?q=' + encodeURIComponent(term);
+    }
+    const res = await fetch(url, {credentials:'include'});
+    const j = await res.json();
+    if(!j.success){ box.innerHTML = '<div class="muted">Failed to load.</div>'; return }
+    const items = j.items || [];
+    // aggregate sells by product
+    const agg = {};
+    items.forEach(it => {
+      if((it.type||'').toLowerCase() !== 'sell') return;
+      const p = (it.product||'').toLowerCase().trim();
+      if(!p) return;
+      agg[p] = agg[p] || {product: it.product, quantity:0, sample: it};
+      agg[p].quantity += Number(it.quantity)||0;
+    });
+
+    const rows = Object.values(agg);
+    if(rows.length===0){ box.innerHTML = '<div class="muted">No available products yet.</div>'; return }
+
+    box.innerHTML = rows.map(r=>{
+      const imgPath = '/icons/' + (r.product||'market').toLowerCase().replace(/\s+/g,'-') + '.png';
+      return `<div class="order" style="display:flex;align-items:center;">
+                <img src="${imgPath}" onerror="this.onerror=null;this.src='/icons/market.png'" style="width:72px;height:72px;object-fit:cover;border-radius:8px;margin-right:12px">
+                <div style="flex:1">
+                  <div style="font-weight:700">${r.product}</div>
+                  <div class="muted">Available: ${r.quantity} kg</div>
+                </div>
+              </div>`;
+    }).join('');
+
+  }catch(e){ box.innerHTML = '<div class="muted">Could not load products.</div>' }
+}
+
+document.getElementById('bs_search_btn').addEventListener('click', ()=> loadAvailableProducts());
+
+// Load product catalog for product select
+async function loadProductCatalog(){
+  try{
+    const res = await fetch('/api/products');
+    const j = await res.json();
+    const sel = document.getElementById('product_select');
+    if(!j.success) return;
+    sel.innerHTML = '<option value="">-- Choose product --</option>' + (j.products||[]).map(p=>`<option value="${p.name}">${p.name}</option>`).join('');
+  }catch(e){}
+}
+
+// initial loads
+loadProductCatalog();
+loadAvailableProducts();
+loadOrders();
+
+document.getElementById('place').addEventListener('click', async ()=>{
+  const type = document.getElementById('type').value;
+  const sel = document.getElementById('product_select');
+  const productTyped = document.getElementById('product').value.trim();
+  const product = (sel.value && sel.value !== '') ? sel.value : productTyped;
+  const quantity = Number(document.getElementById('quantity').value);
+  const price = Number(document.getElementById('price').value);
+  if(!product){ alert('Enter product name'); return }
+  const r = await api('/api/order', {method:'POST', body: JSON.stringify({type, product, quantity, price})});
+  if(!r.success){ alert('Failed: '+(r.message||'Unknown')); return }
+  alert('Order placed');
+  document.getElementById('product').value='';
+  loadOrders();
+});
+
+// initial load
+loadOrders();
+</script>
+
+<body>
+
+<div id="site-header"></div>
+<script src="/header.js"></script>
+
+<div class="page-box">

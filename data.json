@@ -1,0 +1,16 @@
+{
+  "commodities": [
+    "Tomato",
+    "Potato",
+    "Onion",
+    "Paddy",
+    "Sugarcane",
+    "Cotton",
+    "Groundnut",
+    "Maize"
+  ],
+  "diseases": [
+    { "name": "Powdery Mildew", "solution": "Apply fungicide and prune infected leaves." },
+    { "name": "Leaf Spot", "solution": "Use copper-based spray." }
+  ]
+}

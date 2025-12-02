@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agri360 - Home</title>
+    <link rel="stylesheet" href="/styles.css">
+    <style>
+        /* Home-specific dark theme + colorful hero */
+        .hero { background: linear-gradient(120deg, #06202a 0%, #063b2f 45%, #0b2e3b 100%); padding:64px 20px; color: #fff; border-radius:12px }
+        .hero h1{ font-size:48px; margin:0 0 12px; font-weight:900; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,0.6) }
+        .hero p{ max-width:820px; font-size:16px; opacity:0.95 }
+        .cta-card{ max-width:960px; margin:-40px auto 48px; padding:28px; background:var(--surface); border-radius:12px; box-shadow:var(--card-shadow); }
+        .cta-btn{ background:var(--accent); color:var(--primary-contrast); padding:14px 20px; border-radius:8px; border:0; font-size:16px; cursor:pointer }
+
+        /* Dark-mode variable overrides when body has class 'dark-mode' */
+        body.dark-mode{
+            --bg: #071016;
+            --surface: #0f1720;
+            --primary: #06121a;
+            --primary-contrast: #ffffff;
+            --accent: #ff8f00;
+            --muted: #a3b1af;
+            --card-shadow: 0 8px 26px rgba(0,0,0,0.6);
+            background: var(--bg);
+            color: #e6f6ea;
+        }
+
+        /* Slightly brighter product cards on dark bg */
+        .product-card{ background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.06)); border: 1px solid rgba(255,255,255,0.02); }
+        .product-title{ color: var(--text) }
+        .product-meta{ color: var(--muted) }
+        .product-price{ color: var(--accent) }
+    </style>
+</head>
+<body class="dark-mode">
+<script src="/theme.js"></script>
+
+<div id="site-header"></div>
+<script src="/header.js"></script>
+
+<div class="layout">
+    <aside class="sidebar">
+        <h3 data-i18n="sidebar.categories">Shop by Category</h3>
+        <div class="category-list">
+            <a href="/market?q=fruits" data-cat="fruits" data-i18n="cat.fruits">Fruits</a>
+            <a href="/market?q=vegetables" data-cat="vegetables" data-i18n="cat.vegetables">Vegetables</a>
+            <a href="/market?q=grains" data-cat="grains" data-i18n="cat.grains">Grains</a>
+            <a href="/market?q=seeds" data-cat="seeds" data-i18n="cat.seeds">Seeds</a>
+        </div>
+
+        <hr style="margin:12px 0">
+        <h3 data-i18n="sidebar.trending">Trending</h3>
+        <div class="muted" data-i18n="home.trending.list">Tomato • Onion • Banana • Maize</div>
+    </aside>
+
+    <main class="main-column">
+        <div class="carousel section-row" id="heroCarousel">
+            <div class="slides" id="slidesContainer">
+                <div class="slide">
+                    <div style="flex:1">
+                        <h2 style="margin:0" data-i18n="home.hero.title">Fresh produce, direct from farmers</h2>
+                        <p class="muted" data-i18n="home.hero.desc">Quality listings, daily deals and trusted sellers in your region.</p>
+                        <div style="margin-top:12px;display:flex;gap:12px;align-items:center">
+                            <a href="/market"><button class="btn-main" style="width:auto;padding:10px 14px" data-i18n="home.cta.shop">Shop Today's Deals</button></a>
+                            <a href="/buy.html"><button class="btn" style="width:auto;padding:10px 14px" data-i18n="home.cta.buyer">I'm a Buyer</button></a>
+                            <a href="/sell.html"><button class="btn-main" style="width:auto;padding:10px 14px;background:var(--primary);color:var(--primary-contrast)" data-i18n="home.cta.seller">I'm a Seller</button></a>
+                            <a href="/cart"><button class="btn" style="width:auto;padding:10px 14px;background:var(--accent);color:#000;font-weight:800" data-i18n="home.cta.cart">View Cart</button></a>
+                        </div>
+                    </div>
+                    <div style="width:320px;text-align:right"><img src="/icons/hero-fruits.jpg" onerror="this.src='/icons/market.png'" alt="hero"></div>
+                </div>
+                <div class="slide">
+                    <div style="flex:1">
+                        <h2 style="margin:0" data-i18n="home.detect.title">Upload & detect plant diseases</h2>
+                        <p class="muted" data-i18n="home.detect.desc">AI-assisted diagnosis and simple care instructions.</p>
+                        <div style="margin-top:12px"><a href="/detect"><button class="btn-main btn-accent" style="width:auto;padding:10px 14px" data-i18n="home.detect.cta">Quick Diagnose</button></a></div>
+                    </div>
+                    <div style="width:320px;text-align:right"><img src="/icons/hero-detect.jpg" onerror="this.src='/icons/market.png'" alt="detect"></div>
+                </div>
+            </div>
+            <div class="dots" id="carouselDots"></div>
+        </div>
+
+        <section class="section-row">
+            <div class="section-title"><h3 style="margin:0" data-i18n="home.deals.title">Today's Deals</h3><a href="/market" class="muted" data-i18n="home.deals.see_all">See all</a></div>
+            <div class="grid" id="dealsGrid"></div>
+        </section>
+
+        <section class="section-row">
+            <div class="section-title"><h3 style="margin:0" data-i18n="home.recommended.title">Recommended for you</h3><a href="/market" class="muted" data-i18n="home.recommended.browse">Browse</a></div>
+            <div class="grid" id="recommendGrid"></div>
+        </section>
+    </main>
+</div>
+
+<script>
+// Simple carousel
+;(function(){
+    const slides = document.getElementById('slidesContainer');
+    const dots = document.getElementById('carouselDots');
+    let idx=0;
+    const total = slides.children.length;
+    function renderDots(){ dots.innerHTML=''; for(let i=0;i<total;i++){ const d=document.createElement('div'); d.className='dot'+(i===0?' active':''); d.addEventListener('click', ()=>{ idx=i; update() }); dots.appendChild(d) } }
+    function update(){ slides.style.transform = 'translateX('+(-idx*100)+'%)'; Array.from(dots.children).forEach((d,i)=>d.className='dot'+(i===idx?' active':'')) }
+    renderDots(); setInterval(()=>{ idx = (idx+1)%total; update() }, 4500);
+})();
+
+// Fill product grids from marketplace API
+// helper: render items into a target grid element
+function renderItems(targetEl, items){
+    try{
+        if(!items || !items.length){ targetEl.innerHTML = '<div class="muted">No items</div>'; return }
+        targetEl.innerHTML = '';
+        items.slice(0,8).forEach(it=>{
+            const card = document.createElement('div'); card.className='product-card';
+            const img = document.createElement('img'); img.src = '/icons/'+((it.product||'market').toLowerCase().replace(/\s+/g,'-')) + '.png'; img.onerror = function(){ this.onerror=null; this.src='/icons/market.png' };
+            const title = document.createElement('div'); title.className='product-title'; title.textContent = it.product; title.setAttribute('data-product-name', it.product || '');
+            const meta = document.createElement('div'); meta.className='product-meta'; meta.textContent = (it.quantity||'') + ' kg • ' + (it.seller||'seller');
+            const price = document.createElement('div'); price.className='product-price'; price.textContent = '₹' + it.price;
+            const actions = document.createElement('div'); actions.className = 'product-actions';
+            const buyBtn = document.createElement('button'); buyBtn.className='btn-main'; buyBtn.textContent='Use'; buyBtn.addEventListener('click', ()=>{ try{ window.addToCart(it, true) }catch(e){ window.location.href='/buy.html' } });
+            const contactBtn = document.createElement('button'); contactBtn.className='btn'; contactBtn.textContent='Contact'; contactBtn.addEventListener('click', ()=>{ try{ window.contactSeller(it.seller, it) }catch(e){ window.location.href='/sell.html' } });
+            actions.appendChild(buyBtn); actions.appendChild(contactBtn);
+            card.appendChild(img); card.appendChild(title); card.appendChild(meta); card.appendChild(price); card.appendChild(actions);
+            targetEl.appendChild(card);
+        });
+    }catch(e){ targetEl.innerHTML = '<div class="muted">Unable to render</div>' }
+}
+
+// Ensure translations are applied after dynamic rendering
+try{ if(typeof ensureI18nLoaded === 'function'){ ensureI18nLoaded(function(){ try{ if(typeof applyTranslations === 'function') applyTranslations(); }catch(e){} }); } }catch(e){}
+
+// fetch items by q or fallback to category param
+async function loadGrid(targetEl, q){
+    targetEl.innerHTML = '<div class="muted">Loading…</div>';
+    try{
+        console.log('[home] loadGrid q=', q);
+        // If requesting today's deals, explicitly use the `today=true` flag so server-side filtering is applied.
+        let url = '/api/marketplace';
+        if(q){
+            if(q === 'deals') url += '?q=deals&today=true';
+            else url += '?q=' + encodeURIComponent(q);
+        }
+        let res = await fetch(url, {credentials:'include'});
+        let j = await res.json(); let items = j.items || [];
+        // if no items, try category param as a fallback
+        if((!items || items.length===0) && q){
+            console.log('[home] trying category fallback for', q);
+            try{
+                res = await fetch('/api/marketplace' + ('?category='+encodeURIComponent(q)), {credentials:'include'});
+                j = await res.json(); items = j.items || [];
+            }catch(e){ console.warn('[home] category fallback fetch error', e); }
+        }
+        renderItems(targetEl, items);
+    }catch(e){ console.warn('[home] loadGrid error', e); targetEl.innerHTML = '<div class="muted">Unable to load</div>' }
+}
+
+loadGrid(document.getElementById('dealsGrid'), 'deals');
+loadGrid(document.getElementById('recommendGrid'));
+
+// Attach category click handlers so clicking sidebar categories filters the recommended grid
+(function(){
+    try{
+        const links = document.querySelectorAll('.category-list a[data-cat]');
+        links.forEach(a=>{
+            a.addEventListener('click', function(ev){
+                try{
+                    ev.preventDefault();
+                    const cat = a.getAttribute('data-cat');
+                    // load category into recommended grid
+                    const target = document.getElementById('recommendGrid');
+                    if(target){
+                        loadGrid(target, cat);
+                        // mark active link
+                        links.forEach(x=>x.classList.remove('active-cat'));
+                        a.classList.add('active-cat');
+                        // scroll main column into view for the user
+                        setTimeout(()=>{ try{ target.scrollIntoView({behavior:'smooth', block:'start'}); }catch(e){} }, 80);
+                    } else {
+                        // fallback: navigate to market page
+                        window.location.href = '/market?q=' + encodeURIComponent(cat);
+                    }
+                }catch(e){ console.error(e); }
+            });
+        });
+    }catch(e){}
+})();
+</script>
+
+<!-- Floating cart quick access -->
+<div id="floating-cart" style="position:fixed;right:18px;bottom:18px;background:var(--accent);color:#000;padding:10px 12px;border-radius:999px;box-shadow:0 8px 20px rgba(0,0,0,0.12);z-index:999;display:flex;gap:8px;align-items:center;cursor:pointer"> 
+    <span style="font-weight:800">Cart</span>
+    <span id="floating-cart-count" style="background:#000;color:var(--accent);padding:2px 8px;border-radius:12px;font-weight:800">0</span>
+</div>
+
+<!-- Inline language FAB: always visible on home page -->
+<div id="home-lang-fab" style="position:fixed;right:18px;top:18px;z-index:1600;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+    <button id="home-lang-btn" style="background:var(--accent);color:var(--primary-contrast);padding:10px 12px;border-radius:999px;border:0;cursor:pointer;font-weight:800">Language</button>
+    <div id="home-lang-menu" style="display:none;background:var(--surface);color:var(--text);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.2);overflow:hidden;min-width:160px">
+    </div>
+</div>
+
+<script>
+    (function(){
+        try{
+            const btn = document.getElementById('home-lang-btn');
+            const menu = document.getElementById('home-lang-menu');
+            function populate(){
+                try{
+                    const langs = (window._I18N && window._I18N.languages) ? window._I18N.languages : { en:'English', hi:'हिन्दी', ta:'தமிழ்', kn:'ಕನ್ನಡ', ml:'മലയാളം' };
+                    menu.innerHTML = '';
+                    // prefer Tamil first
+                    const order = ['ta','hi','ml','kn','en'];
+                    const keys = order.concat(Object.keys(langs).filter(k=>!order.includes(k)));
+                    keys.forEach(k=>{
+                        if(!langs[k]) return;
+                        const item = document.createElement('div'); item.className='lang-option'; item.dataset.lang=k; item.style.cssText='padding:10px 12px;border-bottom:1px solid rgba(0,0,0,0.06);cursor:pointer';
+                        item.textContent = langs[k];
+                        item.addEventListener('click', ()=>{
+                            try{
+                                localStorage.setItem('agri_lang', k);
+                                document.documentElement.lang = k;
+                                if(btn) btn.textContent = langs[k];
+                                if(window.setLanguage) try{ window.setLanguage(k); }catch(e){}
+                                // Ensure translations apply after i18n loaded, then reload as a reliable fallback
+                                if(typeof ensureI18nLoaded === 'function'){
+                                    ensureI18nLoaded(function(){ try{ if(typeof window.applyTranslations === 'function') window.applyTranslations(); }catch(e){} });
+                                } else if(typeof window.applyTranslations === 'function'){
+                                    try{ window.applyTranslations(); }catch(e){}
+                                } else {
+                                    try{ window.dispatchEvent(new CustomEvent('agri_lang_changed',{detail:k})); }catch(e){}
+                                }
+                                // Always reload shortly after selection to ensure visible change
+                                setTimeout(function(){ try{ location.reload(); }catch(e){} }, 250);
+                                menu.style.display='none';
+                            }catch(e){ console.error(e) }
+                        });
+                        menu.appendChild(item);
+                    });
+                }catch(e){}
+            }
+            btn.addEventListener('click', (e)=>{ try{ e.stopPropagation(); if(menu.style.display==='block'){ menu.style.display='none'; } else { menu.style.display='block'; populate(); } }catch(e){} });
+            document.addEventListener('click', (ev)=>{ try{ if(!menu.contains(ev.target) && ev.target !== btn) menu.style.display='none'; }catch(e){} });
+            // If i18n isn't loaded yet, attach loader
+            if(window._I18N) populate(); else { const s = document.querySelector('script[src="/i18n.js"]'); if(s) s.addEventListener('load', populate); else { const s2 = document.createElement('script'); s2.src='/i18n.js'; s2.onload = populate; document.head.appendChild(s2); } }
+        }catch(e){ }
+    })();
+</script>
+
+<script>
+    try{
+        document.getElementById('floating-cart').addEventListener('click', ()=>{ window.location.href='/cart' });
+        function updateFloating(){ try{ const n = (window.getCart && window.getCart()) ? window.getCart().reduce((s,it)=>s+(it.qty||1),0) : 0; document.getElementById('floating-cart-count').textContent = n }catch(e){} }
+        updateFloating(); setInterval(updateFloating, 1200);
+    }catch(e){}
+</script>
+
+<!-- Ensure i18n is applied after reload: load i18n.js if needed and run translations with retries -->
+<script>
+    (function(){
+        function applyNow(){
+            try{
+                var lang = localStorage.getItem('agri_lang') || 'en';
+                document.documentElement.lang = lang;
+                if(typeof window.applyTranslations === 'function'){
+                    try{ window.applyTranslations(); console.log('[i18n] applyTranslations executed'); }catch(e){ console.warn('[i18n] applyTranslations error', e); }
+                }
+            }catch(e){ console.warn('[i18n] applyNow error', e) }
+        }
+
+        function ensureAndApply(cb){
+            try{
+                if(window._I18N && typeof window.__t === 'function'){
+                    applyNow(); if(cb) cb(); return;
+                }
+                var s = document.querySelector('script[src="/i18n.js"]');
+                if(!s){ s = document.createElement('script'); s.src='/i18n.js'; s.async=true; document.head.appendChild(s); }
+                s.addEventListener('load', function(){ setTimeout(applyNow, 50); if(cb) cb(); });
+                // also schedule retries in case header/scripts run later
+                setTimeout(applyNow, 120); setTimeout(applyNow, 450);
+            }catch(e){ console.warn('[i18n] ensureAndApply error', e); if(cb) cb(); }
+        }
+
+        // Run immediately and ensure i18n is present
+        ensureAndApply();
+        // Also run on DOMContentLoaded just in case
+        document.addEventListener('DOMContentLoaded', ensureAndApply);
+    })();
+</script>
+
+</body>
+</html>

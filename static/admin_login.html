@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Login</title>
+    <link rel="stylesheet" href="/admin.css">
+</head>
+
+<body>
+<script src="/theme.js"></script>
+
+<div class="navbar">Admin Login</div>
+
+<div class="container">
+    <div class="card">
+        <h2>Login</h2>
+
+        <input id="username" placeholder="Username">
+        <input id="password" type="password" placeholder="Password">
+
+        <button onclick="login()">Login</button>
+
+        <p id="msg" style="color:red;margin-top:10px;"></p>
+    </div>
+</div>
+
+<script>
+function login() {
+    fetch("/admin/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value
+        })
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (d.success) {
+            window.location.href = "/admin/dashboard";
+        } else {
+            document.getElementById("msg").innerHTML = d.message;
+        }
+    });
+}
+</script>
+
+</body>
+</html>

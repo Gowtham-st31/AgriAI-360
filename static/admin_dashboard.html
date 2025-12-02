@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Dashboard</title>
+    <link rel="stylesheet" href="/admin.css">
+</head>
+
+<body>
+<script src="/theme.js"></script>
+
+<div class="navbar">Admin Dashboard</div>
+
+<div class="container">
+
+        <div class="page-box">
+            <h1 style="text-align:center;margin:6px 0 18px">Admin Dashboard</h1>
+            <div class="card-grid">
+                <a href="/admin/orders" class="card">Manage Orders</a>
+                <a href="/admin/products" class="card">Manage Products</a>
+                <a href="/admin/commodities" class="card">Manage Commodities</a>
+                <a href="/admin/diseases" class="card">Manage Diseases</a>
+                <a href="/admin/analytics" class="card">Analytics</a>
+            </div>
+
+            <div style="text-align:center;margin-top:18px">
+                <a href="/admin/logout" class="card logout" style="display:inline-block;min-width:160px">Logout</a>
+            </div>
+        </div>
+
+        <div class="page-box" style="margin-top:18px">
+            <h2>Today's Deals Manager</h2>
+            <p class="muted">Add or remove listings to be featured in Today's Deals.</p>
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+                <input id="deal_id" placeholder="Listing ID (e.g. 1764399303396)" style="padding:8px;border-radius:6px;border:1px solid #ccc;flex:1" />
+                <button id="add_deal" class="btn-main">Add</button>
+            </div>
+            <div id="deals_list" style="margin-top:12px">
+                <div class="muted">Loading deals…</div>
+            </div>
+        </div>
+
+</div>
+
+</body>
+</html>
+
+<script>
+async function refreshDeals(){
+    const box = document.getElementById('deals_list');
+    try{
+        const r = await fetch('/admin/api/today_deals', {credentials:'include'});
+        if(r.status === 401 || r.status === 403){
+            box.innerHTML = '<div class="muted">Admin login required. <a href="/admin_login.html">Login as admin</a></div>';
+            return;
+        }
+        const j = await r.json();
+        if(!j.success){ box.innerHTML = '<div class="muted">Failed to load: '+(j.message||'')+'</div>'; return }
+        const ids = j.ids || [];
+        const items = j.items || [];
+        if(ids.length===0){ box.innerHTML = '<div class="muted">No marked deals.</div>'; return }
+        box.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px">' + ids.map(id=>{
+            const it = (items||[]).find(x=>x.id==id) || {};
+            return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;border:1px solid #eee;border-radius:6px">
+                <div><strong>${it.product||'ID '+id}</strong><div class="muted">${it.quantity||''} kg • ₹${it.price||''}</div></div>
+                <div><button class="btn" onclick="removeDeal(${id})">Remove</button></div>
+            </div>`;
+        }).join('') + '</div>';
+    }catch(e){ box.innerHTML = '<div class="muted">Could not load deals. Is the server running?</div>' }
+}
+
+async function addDeal(){
+    const v = document.getElementById('deal_id').value.trim();
+    if(!v) return alert('Enter listing id');
+    try{
+        const r = await fetch('/admin/api/today_deals', {method:'POST', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'add', id: v})});
+        const j = await r.json();
+        if(j.success){ document.getElementById('deal_id').value=''; refreshDeals(); } else alert('Failed: '+(j.message||''));
+    }catch(e){ alert('Request failed') }
+}
+
+async function removeDeal(id){
+    try{
+        const r = await fetch('/admin/api/today_deals', {method:'DELETE', credentials:'include', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action:'remove', id: id})});
+        const j = await r.json();
+        if(j.success){ refreshDeals(); } else alert('Failed: '+(j.message||''));
+    }catch(e){ alert('Request failed') }
+}
+
+document.getElementById('add_deal').addEventListener('click', addDeal);
+refreshDeals();
+</script>

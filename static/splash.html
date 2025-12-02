@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Loading...</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
+  <style>
+    body {
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      height:100vh;
+      background:#e5f4e3;
+      margin:0;
+      flex-direction:column;
+      font-family: Arial, sans-serif;
+    }
+    img {
+      width:180px;
+      animation: pop 1.2s ease-in-out infinite alternate;
+    }
+    @keyframes pop {
+      from { transform: scale(1); }
+      to { transform: scale(1.12); }
+    }
+    .text {
+      margin-top:20px;
+      font-size:20px;
+      color:#2b6b41;
+      font-weight:bold;
+    }
+  </style>
+</head>
+
+<body>
+<script src="/theme.js"></script>
+
+  <img src="/icons/logo.png" alt="App Logo">
+  <div class="text">Loading Farmer Assistant...</div>
+
+  <script>
+setTimeout(() => {
+  window.location.href = "/home";
+}, 2000);
+</script>
+
+
+</body>
+</html>

@@ -1,0 +1,79 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admin — Products</title>
+  <link rel="stylesheet" href="/admin.css">
+  <style>
+    .muted{color:#666}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #eee}
+    .btn{padding:6px 8px;border-radius:4px}
+    .btn-del{background:#ff4d4f;color:#fff;border:none}
+    .btn-toggle{background:#1a8f46;color:#fff;border:none}
+  </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+  <div class="navbar">Admin — Products</div>
+  <div class="container">
+    <div class="page-box">
+    <h2>Manage Product Catalog</h2>
+    <p class="muted">Add, remove or toggle availability of products displayed on Buy/Sell.</p>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <input id="p_name" placeholder="Product name" style="flex:1;padding:8px;border:1px solid #ccc;border-radius:6px">
+      <input id="p_icon" placeholder="Icon filename (e.g., tomato.png)" style="width:240px;padding:8px;border:1px solid #ccc;border-radius:6px">
+      <button id="add" class="btn">Add</button>
+    </div>
+
+    <div id="list">Loading...</div>
+    </div>
+  </div>
+
+<script>
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({credentials:'include', headers:{'Content-Type':'application/json'}}, opts));
+  try{return await r.json()}catch(e){return {success:false,message:'Invalid JSON'}}
+}
+
+async function load(){
+  const wrap = document.getElementById('list');
+  wrap.innerHTML = 'Loading...';
+  const r = await api('/admin/api/products');
+  if(!r.success){ wrap.innerHTML = '<div class="muted">Failed to load</div>'; return }
+  const products = r.products || [];
+  if(!products.length){ wrap.innerHTML = '<div class="muted">No products yet.</div>'; return }
+  const rows = products.map(p=>{
+    return `<tr data-id="${p.id}"><td>${p.id}</td><td>${p.name}</td><td>${p.icon||''}</td><td>${p.available?'<span style="color:green">Available</span>':'<span style="color:#888">Hidden</span>'}</td><td><button class="btn btn-toggle btn-small">Toggle</button> <button class="btn btn-del btn-small">Delete</button></td></tr>`;
+  }).join('');
+  wrap.innerHTML = `<table class="admin-table"><thead><tr><th>ID</th><th>Name</th><th>Icon</th><th>Available</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+
+  document.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click', async (e)=>{
+    const id = e.target.closest('tr').getAttribute('data-id');
+    if(!confirm('Delete product '+id+'?')) return;
+    const res = await api('/admin/api/product/'+id+'/delete', {method:'POST'});
+    if(res.success) load(); else alert('Failed');
+  }));
+
+  document.querySelectorAll('.btn-toggle').forEach(b=>b.addEventListener('click', async (e)=>{
+    const id = e.target.closest('tr').getAttribute('data-id');
+    const res = await api('/admin/api/product/'+id+'/toggle', {method:'POST'});
+    if(res.success) load(); else alert('Failed');
+  }));
+}
+
+document.getElementById('add').addEventListener('click', async ()=>{
+  const name = document.getElementById('p_name').value.trim();
+  const icon = document.getElementById('p_icon').value.trim();
+  if(!name){ alert('Enter product name'); return }
+  const res = await api('/admin/api/products', {method:'POST', body: JSON.stringify({name, icon})});
+  if(res.success){ document.getElementById('p_name').value=''; document.getElementById('p_icon').value=''; load(); }
+  else alert('Failed: '+(res.message||''));
+});
+
+load();
+</script>
+</body>
+</html>

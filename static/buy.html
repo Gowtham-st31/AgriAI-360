@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Buy Products — Agri360</title>
+  <link rel="stylesheet" href="/styles.css">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    .product-grid{ display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px }
+    .product-card{ padding:12px;border-radius:8px;background:var(--surface);box-shadow:var(--card-shadow);display:flex;flex-direction:column }
+    .product-card img{ width:100%;height:140px;object-fit:cover;border-radius:6px }
+    .price{ color:var(--accent);font-weight:800;font-size:18px }
+    .muted{ color:var(--muted);font-size:13px }
+  </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+  <div id="site-header"></div>
+  <script src="/header.js"></script>
+
+  <div class="page-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px">
+      <h2 style="margin:0">Buy Products</h2>
+      <div style="max-width:420px;flex:1;display:flex;gap:6px;align-items:center">
+        <input id="q" placeholder="Search products, e.g. tomato" style="flex:1;padding:10px;border-radius:8px;border:1px solid #e8e8e8" />
+        <button id="buy-voice-btn" type="button" title="Voice search" style="background:transparent;border:0;color:var(--text);font-size:18px;cursor:pointer">🎤</button>
+        <button onclick="doSearch()" class="btn-main" style="width:auto;padding:10px 14px">Search</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <button class="btn" onclick="filter('fruits')">Fruits</button>
+      <button class="btn" onclick="filter('vegetables')">Vegetables</button>
+      <button class="btn" onclick="filter('grains')">Grains</button>
+      <button class="btn" onclick="filter('seeds')">Seeds</button>
+    </div>
+
+    <div id="products" class="product-grid"></div>
+  </div>
+
+  <script>
+    async function loadProducts(q){
+      let url = '/api/marketplace';
+      if(q){
+        if((q||'').toString().toLowerCase() === 'deals') url += '?q=deals&today=true';
+        else url += '?q=' + encodeURIComponent(q);
+      }
+      const r = await fetch(url);
+      const j = await r.json();
+      const items = j.items || [];
+      window.LAST_PRODUCTS = items;
+      const el = document.getElementById('products'); el.innerHTML='';
+      if(!items.length) { el.innerHTML='<div class="muted">No listings found.</div>'; return }
+      items.forEach((it, idx)=>{
+        const div = document.createElement('div'); div.className='product-card';
+        const img = document.createElement('img'); img.src = '/icons/'+((it.product||'market').toLowerCase().replace(/\s+/g,'-')) + '.png'; img.onerror = function(){ this.onerror=null; this.src='/icons/market.png' };
+        const body = document.createElement('div'); body.style.flex='1'; body.style.marginTop='8px';
+        const top = document.createElement('div'); top.style.display='flex'; top.style.justifyContent='space-between'; top.style.alignItems='center';
+        const strong = document.createElement('strong'); strong.textContent = it.product || '';
+        strong.className = 'product-title'; strong.setAttribute('data-product-name', it.product || '');
+        const priceDiv = document.createElement('div'); priceDiv.className = 'price'; priceDiv.textContent = '₹' + (it.price||'0');
+        top.appendChild(strong); top.appendChild(priceDiv);
+        const meta = document.createElement('div'); meta.className = 'muted'; meta.textContent = (it.quantity||'') + ' kg • Seller: ' + (it.seller||'anon');
+        body.appendChild(top); body.appendChild(meta);
+        const actions = document.createElement('div'); actions.style.marginTop='10px'; actions.style.display='flex'; actions.style.gap='8px';
+        const useBtn = document.createElement('button'); useBtn.className='btn-main'; useBtn.textContent = 'Use';
+        useBtn.addEventListener('click', ()=>{ try{ window.addToCart(it, true) }catch(e){ try{ window.addToCart(it) }catch(e){} } });
+        actions.appendChild(useBtn);
+        div.appendChild(img); div.appendChild(body); div.appendChild(actions);
+        el.appendChild(div);
+      })
+        // Apply translations for any dynamic text rendered
+        try{ if(typeof ensureI18nLoaded === 'function') ensureI18nLoaded(function(){ try{ if(typeof applyTranslations === 'function') applyTranslations(); }catch(e){} }); }catch(e){}
+    }
+
+    function doSearch(){
+      const raw = document.getElementById('q').value || '';
+      const mapped = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(raw) : raw;
+      loadProducts(mapped);
+    }
+    function filter(cat){
+      const mapped = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(cat) : cat;
+      loadProducts(mapped);
+    }
+    function addToCart(id){ try{ const item = (window.LAST_PRODUCTS||[]).find(x=>x.id==id) || { id:id }; window.addToCart(item); }catch(e){ alert('Added to cart') } }
+
+    loadProducts();
+  </script>
+  <script>
+    // Local voice search on Buy page: supports Tamil mapping
+    (function(){
+      try{
+        const vb = document.getElementById('buy-voice-btn');
+        if(!vb) return;
+        if(!(('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window))){ vb.style.display='none'; return; }
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const rec = new SpeechRec();
+        const speechLangMap = (k)=>({'en':'en-IN','hi':'hi-IN','ta':'ta-IN','kn':'kn-IN','ml':'ml-IN'})[k] || k;
+        const setRecLang = ()=>{ rec.lang = speechLangMap(localStorage.getItem('agri_lang')||'en') };
+        setRecLang(); rec.interimResults = false; rec.maxAlternatives = 1;
+        vb.addEventListener('click', ()=>{ try{ setRecLang(); rec.start(); vb.textContent='🎙️' }catch(e){} });
+        rec.onresult = (ev)=>{ try{ const t = ev.results[0][0].transcript; document.getElementById('q').value = t; doSearch(); vb.textContent='🎤' }catch(e){} };
+        rec.onerror = (e)=>{ vb.textContent='🎤' };
+        // update recognition language when global language changes
+        window.addEventListener('storage', (ev)=>{ if(ev.key==='agri_lang'){ try{ setRecLang(); }catch(e){} } });
+      }catch(e){}
+    })();
+  </script>
+</body>
+</html>

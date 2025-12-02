@@ -1,0 +1,8 @@
+python-dotenv>=1.0.0
+# (Other project deps already used: flask, flask-cors, tensorflow, pillow, numpy, requests, beautifulsoup4, apscheduler)
+
+requests>=2.0.0
+
+# MongoDB client
+pymongo
+dnspython

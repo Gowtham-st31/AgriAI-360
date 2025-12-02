@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admin — Manage Orders</title>
+  <link rel="stylesheet" href="/admin.css">
+  <style>
+    table { width:100%; border-collapse:collapse }
+    th, td { padding:8px 10px; border-bottom:1px solid #eee }
+    th { text-align:left; background:#f7f7f7 }
+    .muted { color:#666 }
+    .btn { padding:6px 8px; border-radius:4px; cursor:pointer }
+    .btn-del { background:#ff4d4f; color:white; border:none }
+    .btn-ok { background:#28a745; color:white; border:none }
+    .small-input { width:80px }
+  </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+  <div class="navbar">Admin — Orders</div>
+  <div class="container">
+    <div class="page-box">
+      <h2 style="margin-top:0">Manage Orders</h2>
+      <p class="muted">View, update status or delete orders.</p>
+      <div style="margin:12px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <button id="refresh" class="btn btn-small">Refresh</button>
+        <div style="margin-left:8px">
+          <strong>Sell Orders:</strong> <span id="sellCount">0</span>
+          &nbsp;&nbsp;
+          <strong>Buy Orders:</strong> <span id="buyCount">0</span>
+        </div>
+      </div>
+      <div id="tableWrap">Loading...</div>
+    </div>
+  </div>
+
+<script>
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({credentials:'include', headers:{'Content-Type':'application/json'}}, opts));
+  try{return await r.json()}catch(e){return {success:false,message:'Invalid JSON'}}
+}
+
+async function loadAdminOrders(){
+  const wrap = document.getElementById('tableWrap');
+  wrap.innerHTML = 'Loading...';
+  // Fetch sells and buys separately from server for efficiency
+  const sellsResp = await api('/admin/api/orders?type=sell');
+  const buysResp = await api('/admin/api/orders?type=buy');
+  if(!sellsResp.success || !buysResp.success){ wrap.innerHTML = '<div class="muted">Failed to load.</div>'; return }
+  const sells = sellsResp.orders || [];
+  const buys = buysResp.orders || [];
+  if(!sells.length && !buys.length){ wrap.innerHTML = '<div class="muted">No orders yet.</div>'; document.getElementById('sellCount').textContent = '0'; document.getElementById('buyCount').textContent = '0'; return }
+
+  document.getElementById('sellCount').textContent = sells.length;
+  document.getElementById('buyCount').textContent = buys.length;
+
+  function buildTable(rows){
+    if(!rows.length) return '<div class="muted">No items</div>';
+    const tr = rows.map(o => {
+      const ts = o.timestamp ? (parseFloat(o.timestamp) * 1000) : (o.id ? (parseInt(o.id)/1) : Date.now());
+      const dt = new Date(ts);
+      const status = o.status || '';
+      return `<tr data-id="${o.id}">
+        <td>${o.id}</td>
+        <td>${o.type}</td>
+        <td>${o.product}</td>
+        <td><input class="small-input qty" value="${o.quantity}"></td>
+        <td><input class="small-input price" value="${o.price}"></td>
+        <td>${o.user||''}</td>
+        <td>${dt.toLocaleString()}</td>
+        <td><input class="small-input status" value="${status}"></td>
+        <td>
+          <button class="btn btn-ok btn-small" data-action="save">Save</button>
+          <button class="btn btn-del btn-small" data-action="delete">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+    return `<table class="admin-table" style="margin-bottom:18px"><thead><tr><th>ID</th><th>Type</th><th>Product</th><th>Qty</th><th>Price</th><th>User</th><th>Placed</th><th>Status</th><th>Actions</th></tr></thead><tbody>${tr}</tbody></table>`;
+  }
+
+  const html = `<div><h3>Sell Orders</h3>${buildTable(sells)}</div><div><h3>Buy Orders</h3>${buildTable(buys)}</div>`;
+  wrap.innerHTML = html;
+
+  // attach handlers (same as before)
+  document.querySelectorAll('button[data-action]').forEach(btn=>{
+    btn.addEventListener('click', async (e)=>{
+      const tr = e.target.closest('tr');
+      const id = tr.getAttribute('data-id');
+      const action = e.target.getAttribute('data-action');
+      if(action==='delete'){
+        if(!confirm('Delete order '+id+'?')) return;
+        const res = await api('/admin/api/order/'+id+'/delete', {method:'POST'});
+        if(res.success){ alert('Deleted'); loadAdminOrders() } else { alert('Failed: '+(res.message||'')) }
+      } else if(action==='save'){
+        const qty = tr.querySelector('.qty').value;
+        const price = tr.querySelector('.price').value;
+        const status = tr.querySelector('.status').value;
+        const res = await api('/admin/api/order/'+id+'/update', {method:'POST', body: JSON.stringify({quantity: qty, price: price, status: status})});
+        if(res.success){ alert('Saved'); loadAdminOrders() } else { alert('Failed: '+(res.message||'')) }
+      }
+    });
+  });
+}
+
+document.getElementById('refresh').addEventListener('click', loadAdminOrders);
+loadAdminOrders();
+</script>
+</body>
+</html>

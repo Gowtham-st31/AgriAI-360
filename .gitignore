@@ -1,0 +1,13 @@
+# Local env files
+.env
+
+# Python cache
+__pycache__/
+.venv/
+venv/
+
+# Model file (if large)
+model.keras
+ 
+# Data files (do not commit local JSON data)
+data/*.json

@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>agriAI360 — Login / Signup</title>
+    <style>
+        :root{--bg:#06251f;--card:#1e1c1c;--accent:#5b340a;--muted:#667085}
+        body{font-family:Inter,system-ui,Arial,sans-serif;background:linear-gradient(180deg,#073532 0%,#06251f 40%,#0b1920 100%);margin:0;padding:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background-attachment:fixed}
+        .card{width:380px;max-width:92vw;background:var(--card);border-radius:12px;box-shadow:0 10px 30px rgba(15,23,42,.08);padding:22px;margin:0}
+        .tabs{display:flex;gap:8px;margin-bottom:14px}
+        .tab{flex:1;padding:10px 12px;border-radius:8px;text-align:center;cursor:pointer;color:var(--muted)}
+        .tab.active{background:#282928;color:var(--accent);font-weight:600}
+        h1{font-size:18px;margin:0 0 8px}
+        label{font-size:12px;color:var(--muted);display:block;margin-top:10px}
+        input[type="text"],input[type="password"],input[type="email"]{width:100%;padding:11px;border-radius:8px;border:1px solid #e6e9ef;margin-top:6px;font-size:14px}
+        .row{display:flex;gap:8px}
+        button.primary{width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:8px;margin-top:14px;font-weight:600;cursor:pointer}
+        button.ghost{background:transparent;border:1px solid #e6e9ef;color:var(--muted);padding:10px;border-radius:8px;cursor:pointer}
+        .small{font-size:13px;color:var(--muted);margin-top:8px}
+        .otp-box{display:none;margin-top:8px}
+        .show{display:block}
+        /* Hide any duplicate card elements and keep only the first one visible */
+        .card:not(:first-of-type){display:none !important}
+        /* Ensure the main card is centered */
+        #main-card{margin:0 auto}
+    </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+
+<div id="main-card" class="card">
+    <div class="tabs">
+        <div id="tab-login" class="tab active">Login</div>
+        <div id="tab-signup" class="tab">Sign Up</div>
+    </div>
+
+    <div id="login-view">
+        <h1>Welcome back</h1>
+        <label for="login-email">Email</label>
+        <input id="login-email" type="email" autocomplete="email" placeholder="you@domain.com">
+        <label for="login-password">Password</label>
+        <input id="login-password" type="password" autocomplete="current-password" placeholder="Your password">
+
+        <div class="row">
+            <button id="btn-login" class="primary">Login (password + OTP)</button>
+            <button id="btn-login-otp" class="ghost">Login with OTP</button>
+        </div>
+
+        <div id="login-otp-box" class="otp-box">
+            <label for="login-otp">Enter OTP</label>
+            <input id="login-otp" type="text" placeholder="6-digit code">
+            <button id="btn-verify-login-otp" class="primary">Verify OTP</button>
+        </div>
+
+        <div class="small">New here? <span id="to-signup" style="color:var(--accent);cursor:pointer">Create an account</span></div>
+    </div>
+
+    <div id="signup-view" style="display:none">
+        <h1>Create account</h1>
+        <label for="signup-email">Email</label>
+        <input id="signup-email" type="email" autocomplete="email" placeholder="you@domain.com">
+        <label for="signup-name">Full name</label>
+        <input id="signup-name" type="text" placeholder="Your full name">
+        <label for="signup-phone">Phone</label>
+        <input id="signup-phone" type="text" placeholder="Mobile number (with country code)">
+        <label for="signup-address">Address</label>
+        <input id="signup-address" type="text" placeholder="Village / Street">
+        <div class="row">
+            <input id="signup-city" type="text" placeholder="City">
+            <input id="signup-pincode" type="text" placeholder="Pincode">
+        </div>
+        <label for="signup-password">Password</label>
+        <input id="signup-password" type="password" autocomplete="new-password" placeholder="Choose a password">
+
+        <div class="row">
+            <button id="btn-signup" class="primary">Sign Up (send OTP)</button>
+            <button id="btn-cancel-signup" class="ghost">Cancel</button>
+        </div>
+
+        <div id="signup-otp-box" class="otp-box">
+            <label for="signup-otp">Enter OTP</label>
+            <input id="signup-otp" type="text" placeholder="6-digit code">
+            <button id="btn-verify-signup-otp" class="primary">Verify & Create</button>
+        </div>
+
+        <div class="small">Already have an account? <span id="to-login" style="color:var(--accent);cursor:pointer">Log in</span></div>
+    </div>
+
+</div>
+
+<script>
+// simple tab handling
+const tabLogin = document.getElementById('tab-login');
+const tabSignup = document.getElementById('tab-signup');
+const loginView = document.getElementById('login-view');
+const signupView = document.getElementById('signup-view');
+function showLogin(){ tabLogin.classList.add('active'); tabSignup.classList.remove('active'); loginView.style.display='block'; signupView.style.display='none'; }
+function showSignup(){ tabSignup.classList.add('active'); tabLogin.classList.remove('active'); loginView.style.display='none'; signupView.style.display='block'; }
+tabLogin.onclick = showLogin; tabSignup.onclick = showSignup;
+document.getElementById('to-signup').onclick = showSignup;
+document.getElementById('to-login').onclick = showLogin;
+
+// helpers
+async function postJson(url, body){
+    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body)});
+    try{ return await res.json(); }catch(e){ return {success:false,message:'Invalid server response'} }
+}
+
+// Login with password -> triggers OTP 2FA
+document.getElementById('btn-login').addEventListener('click', async ()=>{
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+    if(!email || !password){ alert('Enter email and password'); return; }
+    const r = await postJson('/auth/login_password',{email,password});
+    alert(r.message||'');
+    if(r.success){ document.getElementById('login-otp-box').classList.add('show'); }
+});
+
+// Login directly with OTP (no password)
+document.getElementById('btn-login-otp').addEventListener('click', async ()=>{
+    const email = document.getElementById('login-email').value.trim();
+    if(!email){ alert('Enter email'); return; }
+    const r = await postJson('/auth/request_otp',{email});
+    alert(r.message||'');
+    if(r.success) document.getElementById('login-otp-box').classList.add('show');
+});
+
+// Verify login OTP
+document.getElementById('btn-verify-login-otp').addEventListener('click', async ()=>{
+    const otp = document.getElementById('login-otp').value.trim();
+    if(!otp){ alert('Enter OTP'); return; }
+    const r = await postJson('/auth/verify_otp',{otp});
+    if(!r.success){ alert(r.message||'OTP verify failed'); return; }
+    window.location.href = r.redirect || (r.role==='admin'?'/admin/dashboard':'/home');
+});
+
+// Signup flow
+document.getElementById('btn-signup').addEventListener('click', async ()=>{
+    const email = document.getElementById('signup-email').value.trim();
+    const password = document.getElementById('signup-password').value;
+    const name = document.getElementById('signup-name').value.trim();
+    const phone = document.getElementById('signup-phone').value.trim();
+    const address = document.getElementById('signup-address').value.trim();
+    const city = document.getElementById('signup-city').value.trim();
+    const pincode = document.getElementById('signup-pincode').value.trim();
+    if(!email || !password){ alert('Enter email and choose a password'); return; }
+    const r = await postJson('/auth/register',{email,password,profile:{name,phone,address,city,pincode}});
+    alert(r.message||'');
+    if(r.success) document.getElementById('signup-otp-box').classList.add('show');
+});
+
+// Verify signup OTP
+document.getElementById('btn-verify-signup-otp').addEventListener('click', async ()=>{
+    const otp = document.getElementById('signup-otp').value.trim();
+    if(!otp){ alert('Enter OTP'); return; }
+    const r = await postJson('/auth/verify_otp',{otp});
+    if(!r.success){ alert(r.message||'OTP verify failed'); return; }
+    try{
+        const profile = {
+            email: document.getElementById('signup-email').value.trim(),
+            name: document.getElementById('signup-name').value.trim(),
+            phone: document.getElementById('signup-phone').value.trim(),
+            address: document.getElementById('signup-address').value.trim(),
+            city: document.getElementById('signup-city').value.trim(),
+            pincode: document.getElementById('signup-pincode').value.trim()
+        };
+        localStorage.setItem('agri_profile', JSON.stringify(profile));
+    }catch(e){}
+    window.location.href = r.redirect || (r.role==='admin'?'/admin/dashboard':'/home');
+});
+
+// Cancel signup
+document.getElementById('btn-cancel-signup').addEventListener('click', ()=>{ document.getElementById('signup-email').value=''; document.getElementById('signup-password').value=''; showLogin(); });
+
+// Enter key for OTP fields
+['login-otp','signup-otp'].forEach(id=>{
+    const el = document.getElementById(id);
+    el && el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); document.getElementById(id==='login-otp'?'btn-verify-login-otp':'btn-verify-signup-otp').click(); } });
+});
+
+// Banner if already logged in
+(async function(){
+    try{
+        const r = await fetch('/api/user', {credentials: 'include'}).then(x=>x.json());
+        if(r && r.logged){
+            const banner = document.createElement('div');
+            banner.style = 'position:fixed;left:16px;top:16px;right:16px;background:#eefaf1;border:1px solid #cfe9d9;padding:12px;border-radius:8px;z-index:9999;display:flex;justify-content:space-between;align-items:center;gap:12px';
+            banner.innerHTML = `<div style="color:#0a5b2c;font-weight:600">You are already signed in as ${r.user && r.user.email ? r.user.email : 'user'}.</div>`;
+            const btn = document.createElement('button');
+            btn.textContent = 'Continue to Home';
+            btn.style = 'background:#12733a;color:#fff;padding:8px 12px;border-radius:8px;border:0;cursor:pointer';
+            btn.addEventListener('click', ()=>{ window.location.href = '/home'; });
+            banner.appendChild(btn);
+            document.body.appendChild(banner);
+        }
+    }catch(e){ }
+})();
+
+</script>
+</body>
+</html>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>agriAI360 — Login / Signup</title>
+    <style>
+        :root{--bg:#eef2f5;--card:#ffffff;--accent:#0a5b2c;--muted:#667085}
+        /* center the main card on the page */
+        body{font-family:Inter,system-ui,Arial,sans-serif;background:var(--bg);margin:0;padding:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+        .card{width:380px;max-width:92vw;background:var(--card);border-radius:12px;box-shadow:0 10px 30px rgba(15,23,42,.08);padding:22px;margin:0}
+        /* Hide any duplicate cards — only show the main card */
+        .card:not(#main-card){display:none !important}
+        .tabs{display:flex;gap:8px;margin-bottom:14px}
+        .tab{flex:1;padding:10px 12px;border-radius:8px;text-align:center;cursor:pointer;color:var(--muted)}
+        .tab.active{background:#f0faf4;color:var(--accent);font-weight:600;box-shadow:inset 0 -2px 0 rgba(10,91,44,.08)}
+        h1{font-size:18px;margin:0 0 8px}
+        label{font-size:12px;color:var(--muted);display:block;margin-top:10px}
+        input[type="text"],input[type="password"],input[type="email"]{width:100%;padding:11px;border-radius:8px;border:1px solid #e6e9ef;margin-top:6px;font-size:14px}
+        .row{display:flex;gap:8px}
+        button.primary{width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:8px;margin-top:14px;font-weight:600;cursor:pointer}
+        button.ghost{background:transparent;border:1px solid #e6e9ef;color:var(--muted);padding:10px;border-radius:8px;cursor:pointer}
+        .small{font-size:13px;color:var(--muted);margin-top:8px}
+        .otp-box{display:none;margin-top:8px}
+        .show{display:block}
+        .inline{display:inline-block}
+    </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+
+<!-- No site header on login page to keep login UI minimal -->
+
+<div id="main-card" class="card">
+    <div class="tabs">
+        <div id="tab-login" class="tab active">Login</div>
+        <div id="tab-signup" class="tab">Sign Up</div>
+    </div>
+
+    <div id="login-view">
+        <h1>Welcome back</h1>
+        <label for="login-email">Email</label>
+        <input id="login-email" type="email" autocomplete="email" placeholder="you@domain.com">
+        <label for="login-password">Password</label>
+        <input id="login-password" type="password" autocomplete="current-password" placeholder="Your password">
+
+        <div class="row">
+            <button id="btn-login" class="primary">Login (password + OTP)</button>
+            <button id="btn-login-otp" class="ghost">Login with OTP</button>
+        </div>
+
+        <div id="login-otp-box" class="otp-box">
+            <label for="login-otp">Enter OTP</label>
+            <input id="login-otp" type="text" placeholder="6-digit code">
+            <button id="btn-verify-login-otp" class="primary">Verify OTP</button>
+        </div>
+
+        <div class="small">New here? <span id="to-signup" style="color:var(--accent);cursor:pointer">Create an account</span></div>
+    </div>
+
+    <div id="signup-view" style="display:none">
+        <h1>Create account</h1>
+        <label for="signup-email">Email</label>
+        <input id="signup-email" type="email" autocomplete="email" placeholder="you@domain.com">
+                <label for="signup-name">Full name</label>
+                <input id="signup-name" type="text" placeholder="Your full name">
+                <label for="signup-phone">Phone</label>
+                <input id="signup-phone" type="text" placeholder="Mobile number (with country code)">
+                <label for="signup-address">Address</label>
+                <input id="signup-address" type="text" placeholder="Village / Street">
+                <div class="row">
+                    <input id="signup-city" type="text" placeholder="City">
+                    <input id="signup-pincode" type="text" placeholder="Pincode">
+                </div>
+        <label for="signup-password">Password</label>
+        <input id="signup-password" type="password" autocomplete="new-password" placeholder="Choose a password">
+
+        <div class="row">
+            <button id="btn-signup" class="primary">Sign Up (send OTP)</button>
+            <button id="btn-cancel-signup" class="ghost">Cancel</button>
+        </div>
+
+        <div id="signup-otp-box" class="otp-box">
+            <label for="signup-otp">Enter OTP</label>
+            <input id="signup-otp" type="text" placeholder="6-digit code">
+            <button id="btn-verify-signup-otp" class="primary">Verify & Create</button>
+        </div>
+
+        <div class="small">Already have an account? <span id="to-login" style="color:var(--accent);cursor:pointer">Log in</span></div>
+    </div>
+
+</div>
+
+<script>
+// simple tab handling
+const tabLogin = document.getElementById('tab-login');
+const tabSignup = document.getElementById('tab-signup');
+const loginView = document.getElementById('login-view');
+const signupView = document.getElementById('signup-view');
+function showLogin(){ tabLogin.classList.add('active'); tabSignup.classList.remove('active'); loginView.style.display='block'; signupView.style.display='none'; }
+function showSignup(){ tabSignup.classList.add('active'); tabLogin.classList.remove('active'); loginView.style.display='none'; signupView.style.display='block'; }
+tabLogin.onclick = showLogin; tabSignup.onclick = showSignup;
+document.getElementById('to-signup').onclick = showSignup;
+document.getElementById('to-login').onclick = showLogin;
+
+// helpers
+async function postJson(url, body){
+    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include', body: JSON.stringify(body)});
+    return res.json();
+}
+
+// Login with password -> triggers OTP 2FA
+document.getElementById('btn-login').addEventListener('click', async ()=>{
+    const email = document.getElementById('login-email').value.trim();
+    const password = document.getElementById('login-password').value;
+    if(!email || !password){ alert('Enter email and password'); return; }
+    const r = await postJson('/auth/login_password',{email,password});
+    alert(r.message);
+    if(r.success){ document.getElementById('login-otp-box').classList.add('show'); }
+});
+
+// Login directly with OTP (no password)
+document.getElementById('btn-login-otp').addEventListener('click', async ()=>{
+    const email = document.getElementById('login-email').value.trim();
+    if(!email){ alert('Enter email'); return; }
+    const r = await postJson('/auth/request_otp',{email});
+    alert(r.message);
+    if(r.success) document.getElementById('login-otp-box').classList.add('show');
+});
+
+// Verify login OTP
+document.getElementById('btn-verify-login-otp').addEventListener('click', async ()=>{
+    const otp = document.getElementById('login-otp').value.trim();
+    if(!otp){ alert('Enter OTP'); return; }
+    const r = await postJson('/auth/verify_otp',{otp});
+    if(!r.success){ alert(r.message); return; }
+    // Prefer explicit redirect provided by the server, fallback to role-based
+    window.location.href = r.redirect || (r.role==='admin'?'/admin/dashboard':'/home');
+});
+
+// Signup flow: request OTP with password stored server-side temporarily
+document.getElementById('btn-signup').addEventListener('click', async ()=>{
+    const email = document.getElementById('signup-email').value.trim();
+    const password = document.getElementById('signup-password').value;
+    const name = document.getElementById('signup-name').value.trim();
+    const phone = document.getElementById('signup-phone').value.trim();
+    const address = document.getElementById('signup-address').value.trim();
+    const city = document.getElementById('signup-city').value.trim();
+    const pincode = document.getElementById('signup-pincode').value.trim();
+    if(!email || !password){ alert('Enter email and choose a password'); return; }
+    // include extra profile fields during registration
+    const r = await postJson('/auth/register',{email,password,profile:{name,phone,address,city,pincode}});
+    alert(r.message);
+    if(r.success) document.getElementById('signup-otp-box').classList.add('show');
+});
+
+// Verify signup OTP
+document.getElementById('btn-verify-signup-otp').addEventListener('click', async ()=>{
+    const otp = document.getElementById('signup-otp').value.trim();
+    if(!otp){ alert('Enter OTP'); return; }
+    const r = await postJson('/auth/verify_otp',{otp});
+    if(!r.success){ alert(r.message); return; }
+        // if registration succeeded, persist profile client-side for contact prefill
+        try{
+            const profile = {
+                email: document.getElementById('signup-email').value.trim(),
+                name: document.getElementById('signup-name').value.trim(),
+                phone: document.getElementById('signup-phone').value.trim(),
+                address: document.getElementById('signup-address').value.trim(),
+                city: document.getElementById('signup-city').value.trim(),
+                pincode: document.getElementById('signup-pincode').value.trim()
+            };
+            localStorage.setItem('agri_profile', JSON.stringify(profile));
+        }catch(e){}
+        window.location.href = r.redirect || (r.role==='admin'?'/admin/dashboard':'/home');
+});
+
+// Cancel signup
+document.getElementById('btn-cancel-signup').addEventListener('click', ()=>{ document.getElementById('signup-email').value=''; document.getElementById('signup-password').value=''; showLogin(); });
+
+// small nicety: enter on OTP fields
+['login-otp','signup-otp'].forEach(id=>{
+    const el = document.getElementById(id);
+    el && el.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); document.getElementById(id==='login-otp'?'btn-verify-login-otp':'btn-verify-signup-otp').click(); } });
+});
+
+</script>
+
+<script>
+// On load, check whether the session is already authenticated.
+// If so, show a small banner and a "Continue to Home" button instead of
+// automatically redirecting — this avoids refresh/redirect loops and lets
+// the user choose when to proceed.
+(async function(){
+    try{
+        const r = await fetch('/api/user', {credentials: 'include'});
+        const j = await r.json();
+        if(j && j.logged){
+            const banner = document.createElement('div');
+            banner.style = 'position:fixed;left:16px;top:16px;right:16px;background:#eefaf1;border:1px solid #cfe9d9;padding:12px;border-radius:8px;z-index:9999;display:flex;justify-content:space-between;align-items:center;gap:12px';
+            banner.innerHTML = `<div style="color:#0a5b2c;font-weight:600">You are already signed in as ${j.user && j.user.email ? j.user.email : 'user'}.</div>`;
+            const btn = document.createElement('button');
+            btn.textContent = 'Continue to Home';
+            btn.style = 'background:#12733a;color:#fff;padding:8px 12px;border-radius:8px;border:0;cursor:pointer';
+            btn.addEventListener('click', ()=>{ window.location.href = '/home'; });
+            banner.appendChild(btn);
+            document.body.appendChild(banner);
+        }
+    }catch(e){
+        // ignore network errors and let user interact with login UI
+    }
+})();
+</script>

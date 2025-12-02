@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Disease Detection</title>
+    <link rel="stylesheet" href="/styles.css">
+    <style>
+      .card{ max-width:1000px;margin:28px auto;padding:22px;background:var(--surface);border-radius:12px;box-shadow:var(--card-shadow)}
+      .btn { background:#12733a;color:#fff;padding:10px 14px;border-radius:8px;border:0;cursor:pointer }
+      img#preview{ display:block; width:100%; margin-top:12px; border-radius:8px; border:1px solid rgba(0,0,0,0.06)}
+    </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+
+<div id="site-header"></div>
+<script src="/header.js"></script>
+
+<div class="card">
+  <h2 style="text-align:center;color:#12733a" data-i18n="detect.title">🌱 Quick Diagnosis</h2>
+  <div id="modelBanner" style="display:none;margin-bottom:12px;padding:10px;border-radius:8px;background:#fff3cd;color:#856404;border:1px solid #ffeeba" data-i18n="detect.model">Model status</div>
+
+  <div style="max-width:760px;margin:0 auto">
+    <input type="file" id="fileInput" accept="image/*" style="width:100%;padding:6px;border-radius:6px;border:1px solid #ddd">
+    <img id="preview" style="display:none">
+    <div style="display:flex;gap:12px;margin-top:12px;align-items:center">
+      <button id="detect-btn" class="btn" onclick="detectDisease()" data-i18n="detect.button">Detect Disease</button>
+      <a id="detect-back" href="/home" style="color:#12733a;text-decoration:none" data-i18n="detect.back">← Back to Home</a>
+    </div>
+
+    <div id="result" class="result-box" style="display:none;margin-top:16px">
+      <p><strong data-i18n="detect.disease">Disease:</strong> <span id="r_disease"></span></p>
+      <p><strong data-i18n="detect.description">Description:</strong> <span id="r_desc"></span></p>
+      <p><strong data-i18n="detect.remedies">Remedies:</strong></p>
+      <ul id="r_remedies"></ul>
+      <p><strong data-i18n="detect.prevention">Prevention:</strong></p>
+      <ul id="r_prevention"></ul>
+      <p><strong data-i18n="detect.daily">Daily Care Tips:</strong></p>
+      <ul id="r_daily"></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const fileInput = document.getElementById('fileInput');
+const preview = document.getElementById('preview');
+fileInput.onchange = ()=>{ const f=fileInput.files[0]; if(!f) return; preview.src=URL.createObjectURL(f); preview.style.display='block' };
+
+async function detectDisease(){
+  if(!fileInput.files.length){ alert('Please upload an image first.'); return }
+  const fd = new FormData(); fd.append('image', fileInput.files[0]);
+  let res;
+  try{ res = await fetch('/predict',{ method:'POST', body: fd }); }
+  catch(e){ showError('Could not connect to server'); return }
+
+  if(!res.ok){ const err = await res.json().catch(()=>null); showError((err && (err.error||err.message))||'Model not available or prediction failed.'); return }
+  const data = await res.json();
+  showResult(data);
+}
+
+function showError(msg){
+  const box = document.getElementById('result');
+  box.style.display='block';
+  document.getElementById('r_disease').innerText='Detection Failed';
+  document.getElementById('r_desc').innerText = msg;
+  document.getElementById('r_remedies').innerHTML='<li>No remedies available.</li>';
+  document.getElementById('r_prevention').innerHTML='<li>No prevention steps available.</li>';
+  document.getElementById('r_daily').innerHTML='<li>No daily care tips available.</li>';
+}
+
+function showResult(data){
+  const box = document.getElementById('result');
+  box.style.display='block';
+  // Set disease name and description
+  const rd = document.getElementById('r_disease');
+  const descEl = document.getElementById('r_desc');
+  const diseaseName = data.disease || 'Unknown';
+
+  // helper: detect if a string looks like a normalized key and produce a readable fallback
+  function humanizeKey(s){
+    if(!s) return s || '';
+    // If it's already human (contains spaces) just trim
+    if(/\s/.test(s)) return s.toString().trim();
+    // Remove common prefixes like 'disease.', 'remedy.', 'prevention.', 'daily.'
+    let t = s.toString().trim();
+    // strip trailing .description or similar suffixes
+    t = t.replace(/\.(description|details|info)$/i, '');
+    t = t.replace(/^(disease|remedy|prevention|daily)\./i, '');
+    // take last segment if dotted
+    if(t.indexOf('.') !== -1) t = t.split('.').pop();
+    // replace non-alphanumeric groups with space, collapse repeated spaces
+    t = t.replace(/[^a-zA-Z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+    // Title-case words for readability
+    t = t.split(' ').map(w => w.length? w[0].toUpperCase()+w.slice(1) : '').join(' ');
+    return t || s;
+  }
+
+  // Use humanized fallback initially; translations (data-i18n) may replace them afterwards
+  rd.innerText = humanizeKey(diseaseName);
+  descEl.innerText = humanizeKey(data.description || 'No description available');
+
+  // Try to set data-i18n keys so translations will apply if available in i18n.js
+  try{
+    // the server sometimes returns already-normalized keys like 'disease.corn_maize_...'
+    const norm = diseaseName.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_');
+    if(norm) rd.setAttribute('data-i18n', 'disease.'+norm);
+    if(norm) descEl.setAttribute('data-i18n', 'disease.'+norm+'.description');
+  }catch(e){}
+
+  // Remedies list: create <li> elements and attach data-i18n keys where possible
+  const rList = document.getElementById('r_remedies'); rList.innerHTML='';
+  if(data.remedies && data.remedies.length){
+    data.remedies.forEach((r, idx)=>{
+      const li = document.createElement('li');
+      // show a humanized fallback immediately; if a translation exists it will replace it
+      try{ li.textContent = humanizeKey(r); }catch(e){ li.textContent = r }
+      try{ const rnorm = r.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_'); if(rnorm) li.setAttribute('data-i18n', 'remedy.'+rnorm); }catch(e){}
+      rList.appendChild(li);
+    });
+  } else if(data.description){
+    const li = document.createElement('li'); li.textContent = data.description; rList.appendChild(li);
+  } else {
+    const li = document.createElement('li'); li.textContent = 'No remedies found.'; rList.appendChild(li);
+  }
+
+  // Prevention list
+  const pList = document.getElementById('r_prevention'); pList.innerHTML='';
+  if(data.prevention && data.prevention.length){
+    data.prevention.forEach(p=>{
+      const li = document.createElement('li');
+      try{ li.textContent = humanizeKey(p); }catch(e){ li.textContent = p }
+      try{ const pnorm = p.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_'); if(pnorm) li.setAttribute('data-i18n', 'prevention.'+pnorm); }catch(e){}
+      pList.appendChild(li);
+    });
+  } else {
+    const li = document.createElement('li'); li.textContent = 'No prevention steps found.'; pList.appendChild(li);
+  }
+
+  // Daily care
+  const dList = document.getElementById('r_daily'); dList.innerHTML='';
+  if(data.daily_care && data.daily_care.length){
+    data.daily_care.forEach(t=>{
+      const li = document.createElement('li');
+      try{ li.textContent = humanizeKey(t); }catch(e){ li.textContent = t }
+      try{ const dnorm = t.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_'); if(dnorm) li.setAttribute('data-i18n', 'daily.'+dnorm); }catch(e){}
+      dList.appendChild(li);
+    });
+  } else {
+    const li = document.createElement('li'); li.textContent = 'No daily care tips available.'; dList.appendChild(li);
+  }
+
+  // Trigger translations if translations exist for these dynamic keys
+  try{ if(typeof ensureI18nLoaded === 'function') ensureI18nLoaded(function(){ try{ if(typeof applyTranslations === 'function') applyTranslations(); }catch(e){} }); }catch(e){}
+}
+
+(async function(){ try{ const r = await fetch('/model/status'); const j = await r.json(); const b = document.getElementById('modelBanner'); if(b){ if(!j.loaded){ b.style.display='block'; b.innerText = 'Model not loaded: ' + (j.message||'using fallback'); } else { b.style.display='none' } } }catch(e){ const b=document.getElementById('modelBanner'); if(b){ b.style.display='block'; b.innerText='Could not check model status.' } } })();
+</script>
+
+</body>
+</html>

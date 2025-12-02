@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Cart — Agri360</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .cart-wrap{ max-width:1000px;margin:24px auto;padding:16px }
+    .cart-item{ display:flex;gap:12px;align-items:center;padding:12px;border-radius:8px;background:var(--surface);box-shadow:var(--card-shadow);margin-bottom:10px }
+    .cart-item img{ width:96px;height:72px;object-fit:cover;border-radius:6px }
+    .cart-meta{ flex:1 }
+    .cart-actions{ display:flex;gap:8px;align-items:center }
+    .qty{ width:64px;padding:8px;border-radius:6px;border:1px solid #e6e6e6;text-align:center }
+    .muted{ color:var(--muted) }
+    .empty{ text-align:center;padding:40px;background:#fff;border-radius:8px;box-shadow:var(--card-shadow) }
+  </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+  <div id="site-header"></div>
+  <script src="/header.js"></script>
+
+  <div class="cart-wrap page-box">
+    <h2>My Cart</h2>
+    <div id="cartItems"></div>
+    <div id="cartSummary" style="margin-top:12px"></div>
+  </div>
+
+  <script>
+    function renderEmpty(){
+      document.getElementById('cartItems').innerHTML = '<div class="empty"><h3>Your cart is empty</h3><div style="margin-top:8px"><a href="/buy.html" class="btn-main" style="width:auto">Shop products</a></div></div>';
+      document.getElementById('cartSummary').innerHTML='';
+    }
+
+    function getCartLocal(){ try{ return JSON.parse(localStorage.getItem('agri_cart')||'[]') }catch(e){ return [] } }
+    function setCartLocal(c){ try{ localStorage.setItem('agri_cart', JSON.stringify(c)); window.updateCartCount(); }catch(e){} }
+
+    function renderCart(){
+      const cart = getCartLocal();
+      const container = document.getElementById('cartItems');
+      if(!cart || !cart.length){ renderEmpty(); return }
+      container.innerHTML = '';
+      let total = 0;
+      cart.forEach((it, idx)=>{
+        const div = document.createElement('div'); div.className='cart-item';
+          const img = document.createElement('img'); img.src = '/icons/'+((it.product||'market').toLowerCase().replace(/\s+/g,'-'))+'.png'; img.onerror = function(){ this.onerror=null; this.src='/icons/market.png' };
+        const meta = document.createElement('div'); meta.className='cart-meta'; meta.innerHTML = `<div style="font-weight:700">${it.product}</div><div class='muted'>${it.quantity} kg • Seller: ${it.seller||'anon'}</div>`;
+        const actions = document.createElement('div'); actions.className='cart-actions';
+        const qty = document.createElement('input'); qty.type='number'; qty.min=1; qty.value = it.qty || 1; qty.className='qty'; qty.addEventListener('change', ()=>{ it.qty = parseInt(qty.value)||1; cart[idx]=it; setCartLocal(cart); renderCart(); });
+        const price = document.createElement('div'); price.style='font-weight:800;margin-left:8px;color:var(--accent)'; price.textContent = '₹'+(it.price||0);
+        const remove = document.createElement('button'); remove.className='btn'; remove.textContent='Remove'; remove.addEventListener('click', ()=>{ cart.splice(idx,1); setCartLocal(cart); renderCart(); });
+        actions.appendChild(qty); actions.appendChild(price); actions.appendChild(remove);
+        div.appendChild(img); div.appendChild(meta); div.appendChild(actions);
+        container.appendChild(div);
+        total += (parseFloat(it.price)||0) * (it.qty||1);
+      });
+
+      const sum = document.getElementById('cartSummary');
+      sum.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><strong>Total:</strong> <span style='font-size:18px;color:var(--accent);font-weight:800'>₹${total.toFixed(2)}</span></div><div><button id='placeOrder' class='btn-main'>Place Order</button> <button id='clearCart' class='btn'>Clear Cart</button></div></div>`;
+
+      document.getElementById('clearCart').addEventListener('click', ()=>{ if(confirm('Clear cart?')){ setCartLocal([]); renderCart(); } });
+      document.getElementById('placeOrder').addEventListener('click', placeOrder);
+    }
+
+    async function placeOrder(){
+      const cart = getCartLocal();
+      if(!cart || !cart.length){ alert('Cart empty'); return }
+
+      // Validate items before sending to server
+      const invalid = [];
+      const payloads = [];
+      cart.forEach((it, idx) => {
+        const product = it.product || (it.name) || null;
+        const quantity = Number(it.qty || it.quantity || 1) || 0;
+        const price = (typeof it.price !== 'undefined' && it.price !== null) ? Number(it.price) : null;
+        const missing = [];
+        if(!product) missing.push('product');
+        if(!quantity || quantity <= 0) missing.push('quantity');
+        if(price === null || isNaN(price)) missing.push('price');
+        if(missing.length) {
+          invalid.push({ idx, product: product || ('item#'+(idx+1)), missing });
+          } else {
+          // include seller and listing id when available so server can decrement the specific listing
+          const listingId = it.id || null;
+          payloads.push({ type: 'buy', product, quantity, price, seller: it.seller || null, listing_id: listingId });
+        }
+      });
+
+      if(invalid.length){
+        const msgs = invalid.map(i => `${i.product}: missing ${i.missing.join(', ')}`);
+        alert('Please fix these cart items before placing order:\n' + msgs.join('\n'));
+        return;
+      }
+
+      // try to place one order per validated payload
+      for(const payload of payloads){
+        try{
+          const res = await fetch('/api/order', { method:'POST', headers:{'content-type':'application/json'}, credentials:'include', body: JSON.stringify(payload) });
+          if(res.status === 401){ // not logged in
+            alert('Please login to place order'); window.location.href='/login'; return;
+          }
+          const j = await res.json();
+          if(!j.success){ alert('Order failed: '+(j.message||'server error')); return; }
+        }catch(e){ alert('Order failed: '+e); return }
+      }
+      // all orders placed
+      alert('Order placed successfully'); setCartLocal([]); renderCart();
+    }
+
+    // initial render
+    renderCart();
+  </script>
+</body>
+</html>

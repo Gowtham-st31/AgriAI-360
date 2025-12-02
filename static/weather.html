@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Weather Advice — Agri360</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    .card{max-width:980px;margin:28px auto;padding:20px;background:var(--surface);border-radius:10px}
+    .btn{background:#12733a;color:#fff;padding:8px 12px;border-radius:8px;border:0;cursor:pointer}
+    .muted{color:var(--muted)}
+  </style>
+</head>
+<body>
+<div id="site-header"></div>
+<script src="/header.js"></script>
+
+<div class="card">
+  <h2 data-i18n="weather.title">Weather-Based Advice</h2>
+  <p data-i18n="weather.desc">Get localized weather forecast and simple farming advice for the coming days.</p>
+
+  <div style="display:flex;gap:12px;align-items:center;margin-top:12px">
+    <button id="use-loc" class="btn" data-i18n="weather.use_auto">Use my device location</button>
+    <span class="muted">or enter a city</span>
+    <input id="city-input" placeholder="e.g. Chennai" style="padding:8px;border-radius:6px;border:1px solid #ddd;min-width:220px">
+    <button id="city-get" class="btn" data-i18n="weather.get">Get Forecast</button>
+  </div>
+
+  <div id="status" style="margin-top:14px;color:var(--muted)"></div>
+  <div id="weather-result" style="margin-top:16px;display:none">
+    <h3 data-i18n="weather.forecast">Forecast</h3>
+    <div id="forecast-summary" style="margin-bottom:10px;font-weight:600"></div>
+    <details id="forecast-raw" style="margin-bottom:8px"><summary>Show raw forecast JSON</summary>
+      <div id="forecast-json" style="white-space:pre-wrap;font-family:monospace;max-height:260px;overflow:auto;background:rgba(0,0,0,0.03);padding:10px;border-radius:8px;margin-top:8px"></div>
+    </details>
+    <h3 data-i18n="weather.advice">Advice</h3>
+    <ul id="advice-list"></ul>
+    <h4 style="margin-top:12px">Automated Actions</h4>
+    <div id="auto-advice" style="margin-bottom:8px;color:var(--muted)"></div>
+    <div style="overflow:auto;margin-top:8px">
+      <table id="forecast-table" style="width:100%;border-collapse:collapse">
+        <thead>
+          <tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.06)">
+            <th style="padding:8px">When</th>
+            <th style="padding:8px">Temp (°C)</th>
+            <th style="padding:8px">Precip %</th>
+            <th style="padding:8px">Weather</th>
+            <th style="padding:8px">Wind (m/s)</th>
+            <th style="padding:8px">Action</th>
+          </tr>
+        </thead>
+        <tbody id="forecast-rows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  async function showStatus(t){ try{ document.getElementById('status').innerText = t; }catch(e){} }
+
+  async function callWeather(params){
+    try{
+      const url = '/api/weather?' + new URLSearchParams(params).toString();
+      showStatus('Loading...');
+      const r = await fetch(url);
+      if(!r.ok){ const err = await r.json().catch(()=>({error:'unknown'})); showStatus('Error: ' + (err.error||r.statusText)); return null }
+      const jd = await r.json();
+      showStatus('Success');
+      return jd;
+    }catch(e){ showStatus('Could not fetch weather: ' + e); return null }
+  }
+
+  document.getElementById('use-loc').addEventListener('click', ()=>{
+    if(!navigator.geolocation){ showStatus('Geolocation not supported'); return }
+    showStatus('Requesting device location...');
+    navigator.geolocation.getCurrentPosition(async pos=>{
+      const lat = pos.coords.latitude; const lon = pos.coords.longitude;
+      const data = await callWeather({lat:lat, lon:lon});
+      renderWeather(data);
+    }, err=>{ showStatus('Location denied or unavailable: ' + (err.message||err.code)); });
+  });
+
+  document.getElementById('city-get').addEventListener('click', async ()=>{
+    const q = document.getElementById('city-input').value.trim(); if(!q){ showStatus('Enter a city name'); return }
+    const data = await callWeather({q:q}); renderWeather(data);
+  });
+
+  function renderWeather(data){
+    if(!data){ return }
+    const wr = document.getElementById('weather-result'); wr.style.display = 'block';
+    const fj = document.getElementById('forecast-json'); fj.textContent = JSON.stringify(data.forecast || data, null, 2);
+    const fs = document.getElementById('forecast-summary'); fs.textContent = data.summary || '';
+    const adv = document.getElementById('advice-list'); adv.innerHTML = '';
+    const arr = data.advice || [];
+    if(arr.length===0){ const li = document.createElement('li'); li.textContent = (window.__t && window.__t('weather.no_advice')) || 'No specific advice for the next days.'; adv.appendChild(li); }
+    arr.forEach(a=>{ const li=document.createElement('li'); li.textContent = a; adv.appendChild(li); });
+    // open raw JSON details only when user explicitly asks
+    try{ document.getElementById('forecast-raw').open = false }catch(e){}
+
+    // Build table rows and generated actionable advice
+    const rowsEl = document.getElementById('forecast-rows'); rowsEl.innerHTML = '';
+    const autoAdvice = [];
+
+    function pushAdvice(a){ if(!a) return; if(autoAdvice.indexOf(a)===-1) autoAdvice.push(a); }
+
+    // Helper to format epoch -> local date string
+    function fmt(dt){ try{ const d = new Date(dt*1000); return d.toLocaleString(); }catch(e){ return dt } }
+
+    // If One Call daily data
+    const forecast = data.forecast || data;
+    if(forecast && forecast.daily){
+      forecast.daily.slice(0,7).forEach(d=>{
+        const when = fmt(d.dt);
+        const tmin = d.temp && d.temp.min ? Math.round(d.temp.min) : '';
+        const tmax = d.temp && d.temp.max ? Math.round(d.temp.max) : '';
+        const pop = (d.pop!=null) ? Math.round(d.pop*100) : '';
+        const weather = (d.weather && d.weather[0] && d.weather[0].description) || '';
+        const wind = d.wind_speed != null ? (Math.round(d.wind_speed*10)/10) : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td style="padding:8px">${when}</td><td style="padding:8px">${tmin} — ${tmax}</td><td style="padding:8px">${pop}</td><td style="padding:8px">${weather}</td><td style="padding:8px">${wind}</td><td style="padding:8px" class="action-cell"></td>`;
+        rowsEl.appendChild(tr);
+
+        // generate action for this day
+        if(pop >= 50){ pushAdvice('High chance of rain — postpone pesticide/fertilizer sprays and consider covering sensitive crops.'); tr.querySelector('.action-cell').textContent = 'Postpone sprays'; }
+        else if(pop >= 20){ pushAdvice('Chance of rain — schedule field work carefully and avoid mixing sprays in case of sudden showers.'); tr.querySelector('.action-cell').textContent = 'Caution: rain possible'; }
+        if(tmax >= 35){ pushAdvice('High temperature expected — irrigate in early morning and monitor heat stress on plants.'); tr.querySelector('.action-cell').textContent = tr.querySelector('.action-cell').textContent ? tr.querySelector('.action-cell').textContent + '; Irrigate' : 'Irrigate'; }
+        if(tmin <= 3){ pushAdvice('Low temperatures expected — protect seedlings and young plants from possible frost.'); tr.querySelector('.action-cell').textContent = 'Protect seedlings'; }
+        if(wind && parseFloat(wind) >= 8){ pushAdvice('Strong winds expected — secure structures and avoid spraying on windy days.'); tr.querySelector('.action-cell').textContent = 'Avoid spraying'; }
+      });
+    } else if(forecast && forecast.fallback_forecast && forecast.fallback_forecast.list){
+      // fallback 3-hourly entries
+      const list = forecast.fallback_forecast.list.slice(0,16); // next ~48h
+      list.forEach(e=>{
+        const when = e.dt_txt || fmt(e.dt);
+        const temp = e.main && e.main.temp ? Math.round(e.main.temp) : '';
+        const pop = (e.pop!=null) ? Math.round(e.pop*100) : '';
+        const weather = (e.weather && e.weather[0] && e.weather[0].description) || '';
+        const wind = e.wind && e.wind.speed != null ? (Math.round(e.wind.speed*10)/10) : '';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td style="padding:8px">${when}</td><td style="padding:8px">${temp}</td><td style="padding:8px">${pop}</td><td style="padding:8px">${weather}</td><td style="padding:8px">${wind}</td><td style="padding:8px" class="action-cell"></td>`;
+        rowsEl.appendChild(tr);
+
+        if(pop >= 50){ pushAdvice('Heavy rain likely soon — postpone sprays and protect harvested produce.'); tr.querySelector('.action-cell').textContent = 'Postpone sprays'; }
+        else if(pop >= 20){ pushAdvice('Light showers possible — consider delaying spraying and check drainage.'); tr.querySelector('.action-cell').textContent = 'Caution: showers'; }
+        if(temp >= 35){ pushAdvice('High daytime temperature — increase irrigation frequency and shade young plants if possible.'); tr.querySelector('.action-cell').textContent = tr.querySelector('.action-cell').textContent ? tr.querySelector('.action-cell').textContent + '; Irrigate' : 'Irrigate'; }
+        if(e.wind && e.wind.speed && e.wind.speed >= 8){ pushAdvice('Gusty conditions — avoid spraying and secure light infrastructure.'); tr.querySelector('.action-cell').textContent = 'Avoid spraying'; }
+      });
+    }
+
+    // show aggregated automated advice
+    const autoDiv = document.getElementById('auto-advice'); autoDiv.innerHTML = '';
+    if(autoAdvice.length===0){ autoDiv.textContent = (window.__t && window.__t('weather.no_advice')) || 'No specific advice for the next days.'; }
+    else { const ul = document.createElement('ul'); autoAdvice.forEach(a=>{ const li=document.createElement('li'); li.textContent = a; ul.appendChild(li); }); autoDiv.appendChild(ul); }
+  }
+
+  // ensure translations are applied when page loads
+  try{ if(typeof ensureI18nLoaded === 'function') ensureI18nLoaded(function(){ try{ if(typeof applyTranslations === 'function') applyTranslations(); }catch(e){} }); }catch(e){}
+</script>
+</body>
+</html>

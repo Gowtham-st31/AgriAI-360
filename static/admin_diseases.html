@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manage Diseases</title>
+    <link rel="stylesheet" href="/admin.css">
+</head>
+
+<body>
+<script src="/theme.js"></script>
+
+<div class="navbar">Manage Diseases</div>
+
+<div class="container">
+
+    <div class="form-block">
+        <h3>Add Disease Info</h3>
+
+        <input type="text" id="disease" placeholder="Disease name">
+
+        <textarea id="solution" rows="3" placeholder="Solution / description"></textarea>
+
+        <button onclick="addDisease()">Add</button>
+    </div>
+
+    <h3>Existing Diseases</h3>
+    <div class="list-box" id="disease-list"></div>
+
+    <a class="back-btn" href="/admin/dashboard">← Back to Dashboard</a>
+
+</div>
+
+<script src="/admin.js"></script>
+</body>
+</html>

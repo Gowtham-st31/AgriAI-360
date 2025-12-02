@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sell — Agri360</title>
+  <link rel="stylesheet" href="/styles.css">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    .form-row{ display:flex;gap:12px;flex-wrap:wrap }
+    .form-row > *{ flex:1;min-width:160px }
+  </style>
+</head>
+<body>
+<script src="/theme.js"></script>
+  <div id="site-header"></div>
+  <script src="/header.js"></script>
+
+  <div class="page-box">
+    <h2>Sell your produce / Contact seller</h2>
+    <p class="muted">Create a listing or contact a seller. If you came here from a product, your contact details are prefilled.</p>
+
+    <div class="form-block">
+      <div class="form-row">
+        <input id="product" placeholder="Product name (e.g., Tomato)" />
+        <input id="quantity" placeholder="Quantity (kg)" />
+      </div>
+      <div class="form-row" style="margin-top:8px">
+        <div style="flex:1">
+          <label for="product-image" style="display:block;margin-bottom:6px;font-weight:700">Product image (PNG)</label>
+          <input id="product-image" type="file" accept="image/png" />
+        </div>
+        <div style="flex:1;display:flex;align-items:center;justify-content:center">
+          <img id="product-image-preview" src="" alt="preview" style="max-width:220px;display:none;border-radius:8px;box-shadow:var(--card-shadow)">
+        </div>
+      </div>
+      <hr style="margin:10px 0">
+      <h3 style="margin:6px 0">Your contact details</h3>
+      <div class="form-row">
+        <input id="seller-contact-email" placeholder="Seller contact (email)" />
+        <input id="buyer-name" placeholder="Your name" />
+      </div>
+      <div class="form-row">
+        <input id="buyer-phone" placeholder="Phone number" />
+        <input id="buyer-location" placeholder="Your location" />
+      </div>
+      <div class="form-row">
+        <input id="price" placeholder="Price per kg (₹)" />
+        <input id="location" placeholder="Location / Market" />
+      </div>
+      <div style="margin-top:8px">
+        <textarea id="notes" placeholder="Additional notes" style="min-height:90px"></textarea>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:10px">
+        <button class="btn-main" onclick="postListing()">Post Listing</button>
+        <button class="btn" onclick="clearForm()">Clear</button>
+        <button class="btn" onclick="contactSellerFromForm()">Send Message to Seller</button>
+      </div>
+    </div>
+
+    <div id="result" style="margin-top:12px"></div>
+  </div>
+
+    <script>
+    function clearForm(){
+      ['product','quantity','price','location','notes'].forEach(id=>{ try{ document.getElementById(id).value='' }catch(e){} });
+      try{ const f = document.getElementById('product-image'); if(f){ f.value = null; } const p = document.getElementById('product-image-preview'); if(p){ p.src=''; p.style.display='none'; } }catch(e){}
+    }
+
+    // Preview image when seller selects a file
+    try{
+      const imgInput = document.getElementById('product-image');
+      if(imgInput){
+        imgInput.addEventListener('change', function(){
+          try{
+            const f = this.files && this.files[0];
+            const preview = document.getElementById('product-image-preview');
+            if(!f){ if(preview){ preview.src=''; preview.style.display='none' } return }
+            if(f.type !== 'image/png'){ alert('Please upload a PNG image'); this.value=''; if(preview){ preview.src=''; preview.style.display='none' } return }
+            const url = URL.createObjectURL(f);
+            if(preview){ preview.src = url; preview.style.display = 'block'; }
+          }catch(e){ console.error(e) }
+        });
+      }
+    }catch(e){}
+
+    async function postListing(){
+      const data = { product: (document.getElementById('product').value||'').trim(), quantity: document.getElementById('quantity').value, price: document.getElementById('price').value, location: document.getElementById('location').value, notes: document.getElementById('notes').value };
+      if(!data.product || !data.quantity || !data.price){ document.getElementById('result').innerText='Please fill product, quantity and price'; return }
+      try{
+        const fileInput = document.getElementById('product-image');
+        const file = (fileInput && fileInput.files && fileInput.files[0]) ? fileInput.files[0] : null;
+        let res, j;
+        if(file){
+          if(file.type !== 'image/png'){
+            document.getElementById('result').innerHTML = '<div style="color:red">Please upload a PNG image.</div>'; return;
+          }
+          const form = new FormData();
+          form.append('product', data.product);
+          form.append('quantity', data.quantity);
+          form.append('price', data.price);
+          form.append('location', data.location || '');
+          form.append('notes', data.notes || '');
+          form.append('image', file, file.name);
+          res = await fetch('/api/marketplace', { method:'POST', body: form, credentials:'include' });
+          try{ j = await res.json(); }catch(e){ j = { success: false, message: 'Invalid server response' } }
+        } else {
+          res = await fetch('/api/marketplace', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data), credentials:'include' });
+          j = await res.json();
+        }
+        if(j.success) { document.getElementById('result').innerHTML = '<div style="color:green">Listing posted successfully.</div>'; clearForm(); } else { document.getElementById('result').innerHTML = '<div style="color:red">Failed to post listing.</div>' }
+      }catch(e){ console.error(e); document.getElementById('result').innerHTML = '<div style="color:red">Server error.</div>' }
+    }
+
+    // Prefill contact fields from query param or stored profile
+    (function prefill(){
+      try{
+        const params = new URLSearchParams(window.location.search);
+        const contact = params.get('contact');
+        const product = params.get('product');
+        if(contact) document.getElementById('seller-contact-email').value = contact;
+        if(product) document.getElementById('product').value = product;
+        // load buyer profile from localStorage
+        const profile = JSON.parse(localStorage.getItem('agri_profile')||'{}');
+        if(profile){ if(profile.name) document.getElementById('buyer-name').value = profile.name; if(profile.phone) document.getElementById('buyer-phone').value = profile.phone; if(profile.city) document.getElementById('buyer-location').value = (profile.city + (profile.pincode?(' - '+profile.pincode):'')); if(profile.email) { /* optionally use */ } }
+      }catch(e){}
+    })();
+
+    function contactSellerFromForm(){
+      try{
+        const seller = document.getElementById('seller-contact-email').value.trim();
+        const name = document.getElementById('buyer-name').value.trim();
+        const phone = document.getElementById('buyer-phone').value.trim();
+        const location = document.getElementById('buyer-location').value.trim();
+        const product = document.getElementById('product').value.trim();
+        if(!seller){ alert('Seller contact required'); return }
+        const subject = encodeURIComponent('Inquiry about ' + (product||'your listing'));
+        const body = encodeURIComponent('Hello,%0A%0AI am '+(name||'')+' (phone: '+(phone||'')+').%0A%0AI am interested in '+(product||'your product')+'.%0A%0AMy location: '+(location||'')+'%0A%0ARegards');
+        window.location.href = 'mailto:'+seller+'?subject='+subject+'&body='+body;
+      }catch(e){ alert('Unable to send message') }
+    }
+  </script>
+</body>
+</html>

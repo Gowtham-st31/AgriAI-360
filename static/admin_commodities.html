@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manage Commodities</title>
+    <link rel="stylesheet" href="/admin.css">
+</head>
+
+<body>
+<script src="/theme.js"></script>
+
+<div class="navbar">Manage Commodities</div>
+
+<div class="container">
+
+    <div class="form-block">
+        <h3>Add Commodity</h3>
+
+        <input type="text" id="commodity" placeholder="Enter commodity name">
+
+        <button onclick="addCommodity()">Add</button>
+    </div>
+
+    <h3>Existing Commodities</h3>
+    <div class="list-box" id="commodities-list"></div>
+
+    <a class="back-btn" href="/admin/dashboard">← Back to Dashboard</a>
+
+</div>
+
+<script src="/admin.js"></script>
+</body>
+</html>

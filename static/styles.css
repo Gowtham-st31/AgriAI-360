@@ -1,0 +1,416 @@
+:root{
+  /* Vibrant palette */
+  --bg: #fbfbfe;
+  --surface: #ffffff;
+  --text: #0b1214;
+  --primary-solid: #0f4b6b; /* deep teal-blue */
+  /* legacy fallbacks for older rules */
+  --primary: var(--primary-solid);
+  --primary-contrast: #ffffff;
+  --accent-solid: #ff9a00; /* warm orange */
+  --accent: var(--accent-solid);
+  --muted: #6b6b6b;
+  --muted-2: #9aa7a4;
+  --card-shadow: 0 10px 30px rgba(7,15,20,0.06);
+  --glass: rgba(255,255,255,0.72);
+  --glow: rgba(255,154,0,0.14);
+  /* magical background accents */
+  --bg-accent-1: rgba(239, 249, 255, 0.9);
+  --bg-accent-2: rgba(255, 250, 240, 0.9);
+  --blob1: rgba(255,90,160,0.18);
+  --blob2: rgba(60,200,255,0.16);
+  --blob3: rgba(255,210,80,0.14);
+  --blob4: rgba(150,120,255,0.12);
+  --core-tint-1: rgba(255,120,180,0.10);
+  --core-tint-2: rgba(120,220,200,0.10);
+  --light-radial: radial-gradient(1200px 600px at 10% 10%, rgba(255,250,240,0.6), transparent 20%), radial-gradient(800px 400px at 90% 80%, rgba(239,249,255,0.6), transparent 18%);
+  --header-gradient: linear-gradient(90deg, rgba(15,75,107,1) 0%, rgba(31,108,144,1) 50%, rgba(11,65,93,1) 100%);
+}
+
+/* Prevent accidental horizontal scrolling that breaks layout */
+html, body { overflow-x: hidden; }
+
+/* Ensure elements respect container width on small screens */
+* { box-sizing: border-box; }
+
+/* Global dark-mode variables so theme can be applied site-wide */
+body.dark-mode{
+  --bg: #071016;
+  --surface: #0f1720;
+  --text: #e6f6ea;
+  --primary: #06121a;
+  --primary-contrast: #ffffff;
+  --accent: #ff8f00;
+  --muted: #a3b1af;
+  --card-shadow: 0 8px 26px rgba(0,0,0,0.6);
+  background: var(--bg);
+  color: #e6f6ea;
+}
+
+/* Base */
+body{
+  background:var(--bg);
+  color: var(--text);
+
+  transition: background .25s ease, color .25s ease;
+  /* gentle layered background for light theme */
+  background-image: var(--light-radial);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+
+/* Animated magical gradient layer */
+@keyframes agriGradientShift {
+  0% { transform: translate3d(-10%, -10%, 0) scale(1.05); }
+  50% { transform: translate3d(10%, 8%, 0) scale(1.08); }
+  100% { transform: translate3d(-10%, -10%, 0) scale(1.05); }
+}
+
+body::before{
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* layered colorful gradients + conic color core */
+  background:
+    radial-gradient(480px 260px at 6% 14%, rgba(255,180,120,0.14), transparent 18%),
+    radial-gradient(560px 300px at 90% 80%, rgba(80,180,255,0.12), transparent 16%),
+    conic-gradient(from 140deg at 50% 50%, var(--core-tint-1), var(--core-tint-2), rgba(255,200,100,0.06), var(--core-tint-1));
+  mix-blend-mode: screen;
+  opacity: 1;
+  transform: translate3d(0,0,0) scale(1.03);
+  will-change: transform, filter;
+  animation: agriGradientShift 10s ease-in-out infinite, agriHue 18s linear infinite;
+  filter: blur(22px) saturate(1.08);
+}
+
+/* subtle hue-rotation to cycle the colors slowly */
+@keyframes agriHue {
+  0% { filter: blur(24px) saturate(1.05) hue-rotate(0deg); }
+  50% { filter: blur(26px) saturate(1.09) hue-rotate(180deg); }
+  100% { filter: blur(24px) saturate(1.05) hue-rotate(360deg); }
+}
+
+/* moving multi-blob background positions for lively effect */
+@keyframes agriBgMove {
+  0% { background-position: 10% 20%, 80% 70%, 50% 40%; }
+  25% { background-position: 20% 30%, 70% 60%, 60% 50%; }
+  50% { background-position: 80% 70%, 10% 30%, 40% 60%; }
+  75% { background-position: 60% 40%, 30% 80%, 70% 30%; }
+  100% { background-position: 10% 20%, 80% 70%, 50% 40%; }
+}
+
+/* Dark theme variables and background */
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg: #06070a;
+    --surface: #0d1114;
+    --text: #e6f6fb;
+    --primary-solid: #2aa3d3;
+    --accent-solid: #ff7ab6;
+    --card-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    --light-radial: radial-gradient(900px 500px at 15% 20%, rgba(40,100,120,0.12), transparent 18%), radial-gradient(700px 400px at 85% 75%, rgba(140,40,100,0.10), transparent 16%);
+  }
+
+  body{
+    background-image: var(--light-radial);
+  }
+
+  body::before{
+    /* darker palette layers for dark mode */
+    background:
+      radial-gradient(480px 260px at 12% 18%, rgba(40,150,200,0.10), transparent 16%),
+      radial-gradient(420px 220px at 86% 76%, rgba(200,70,140,0.08), transparent 14%),
+      conic-gradient(from 200deg at 50% 50%, rgba(100,180,200,0.06), rgba(200,90,140,0.05), rgba(255,150,90,0.04));
+    mix-blend-mode: screen;
+    filter: blur(30px) saturate(1.1) contrast(1.02);
+  }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce){
+  body::before{ animation: none; filter: none; }
+  body::after{ animation: none; filter: none; }
+}
+
+/* Extra colorful blobs overlay for high-activity look (kept separate for layering control) */
+body::after{
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(680px 420px at 18% 28%, var(--blob1) 0%, transparent 24%),
+    radial-gradient(520px 340px at 86% 74%, var(--blob2) 0%, transparent 22%),
+    radial-gradient(760px 460px at 50% 56%, var(--blob3) 0%, transparent 28%),
+    radial-gradient(460px 300px at 40% 20%, var(--blob4) 0%, transparent 20%);
+  background-size: 760px 460px, 620px 420px, 900px 560px, 520px 340px;
+  background-repeat: no-repeat;
+  mix-blend-mode: overlay;
+  opacity: 0.95;
+  filter: blur(28px) saturate(1.12) contrast(1.03);
+  will-change: background-position, filter;
+  animation: agriBgMove 16s ease-in-out infinite, agriHue 22s linear infinite;
+}
+
+/* Desktop-only heavy effect to avoid mobile perf pain */
+@media (max-width: 899px){
+  body::after{ display: none; }
+  body::before{ filter: blur(18px); animation-duration: 20s; }
+}
+
+/* legacy helper class (not strictly needed if theme applied via JS) */
+.dark-mode{ background:#0f1110 !important; color: #e6f6ea !important }
+
+/* Site-wide dark-mode variable overrides. Add `dark-mode` to body to enable */
+body.dark-mode{
+  --bg: #071016;
+  --surface: #0f1720;
+  --text: #e6f6ea;
+  --primary: #06121a;
+  --primary-contrast: #ffffff;
+  --accent: #ff8f00;
+  --muted: #9fb7b3;
+  --card-shadow: 0 8px 26px rgba(0,0,0,0.6);
+  background: var(--bg);
+  color: #e6f6ea;
+}
+
+/* Dark-mode UI tweaks */
+body.dark-mode .page-box, body.dark-mode .card, body.dark-mode .list-box, body.dark-mode .form-block{ background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.02); }
+body.dark-mode .navbar, body.dark-mode header{ background:var(--primary); color:var(--primary-contrast) }
+body.dark-mode .btn{ background:#122024; color:#fff }
+body.dark-mode .btn-main{ background:var(--accent); color:var(--primary-contrast) }
+body.dark-mode input, body.dark-mode select, body.dark-mode textarea{ background:#07171a; color:#e6f6ea; border:1px solid rgba(255,255,255,0.04) }
+body.dark-mode .sidebar{ background: rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.02) }
+body.dark-mode .product-card{ background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.06)); border:1px solid rgba(255,255,255,0.02); }
+body.dark-mode .section-row{ background: rgba(255,255,255,0.02); }
+body.dark-mode .section-title h3, body.dark-mode .section-title a, body.dark-mode .muted{ color: var(--muted) }
+body.dark-mode .product-title{ color: #f3f8f5 }
+body.dark-mode .product-meta{ color: var(--muted) }
+body.dark-mode .product-price{ color: var(--accent) }
+
+  -webkit-font-smoothing:antialiased;
+}
+
+.dark-mode{ background:#0f1110 !important; color: #e6f6ea !important }
+
+/* Cards / surfaces */
+.card, .page-box, .list-box, .form-block{ border-radius:12px; background:var(--surface); box-shadow:var(--card-shadow) }
+
+/* Navbar */
+.navbar{ background:var(--primary-solid); padding:10px 14px; color:var(--primary-contrast); font-size:16px; font-weight:700 }
+.nav-links a{ color: var(--primary-contrast); padding:10px; margin:6px; text-decoration:none; font-weight:700; opacity:1 }
+.nav-links a:hover{ opacity:1; text-decoration:underline }
+
+/* Amazon-like prominent search in header */
+/* Header layout */
+.site-header{ background:var(--primary-solid); color:var(--primary-contrast); border-bottom:1px solid rgba(255,255,255,0.06); }
+.site-header-inner{ max-width:1200px; margin:0 auto; display:flex; align-items:center; gap:18px; padding:10px 16px; }
+.header-left{ display:flex; align-items:center; }
+.brand{ display:flex; align-items:center; gap:10px; text-decoration:none; color:var(--primary-contrast); }
+.brand img{ height:36px; object-fit:contain }
+.brand #brand-text{ font-weight:800; font-size:20px }
+.header-search{ flex:1; display:flex; justify-content:center }
+.search-form{ display:flex; width:100%; max-width:760px; }
+.search-form input{ flex:1; padding:12px 14px; border-radius:6px 0 0 6px; font-size:15px; border:1px solid rgba(0,0,0,0.06); outline:none }
+.search-form button{ padding:12px 14px; border:0; cursor:pointer }
+.search-form #search-btn{ background:var(--accent); color:var(--primary-contrast); border-radius:0 6px 6px 0; font-weight:700 }
+.search-form #voice-btn{ background:transparent; color:var(--primary-contrast); border:0 }
+.header-right{ display:flex; align-items:center; gap:12px }
+.header-nav a{ color:var(--primary-contrast); text-decoration:none; padding:6px 10px; font-weight:700 }
+.header-nav a#cart-link{ position:relative }
+.header-nav #cart-count{ background:#ff9900; color:#000; padding:2px 6px; border-radius:12px; margin-left:8px; font-weight:700; font-size:12px }
+
+/* Profile block: ensure the username is visible on dark headers */
+.profile-block button, .profile-block #profile-btn{ color: var(--primary-contrast) !important; background: transparent !important; border: 1px solid rgba(255,255,255,0.06) !important; }
+.profile-block #profile-menu{ background: var(--surface) !important; color: var(--text) !important }
+
+/* Floating cart count contrast */
+#floating-cart-count{ background:#000 !important; color:var(--accent) !important }
+.lang-wrap{ display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:6px; background: rgba(255,255,255,0.03) }
+.lang-wrap .globe{ font-size:14px }
+.lang-wrap select{ background:transparent; color:var(--primary-contrast); border:none; outline:none; font-weight:700 }
+.lang-current{ margin-left:6px; font-weight:700; color:var(--primary-contrast) }
+.theme-toggle{ background:transparent; border:1px solid rgba(255,255,255,0.06); padding:6px 8px; border-radius:8px; color:var(--primary-contrast); cursor:pointer }
+
+/* Subnav */
+.site-subnav{ background:var(--surface); padding:8px 0; border-top:1px solid rgba(255,255,255,0.02) }
+.subnav-inner{ max-width:1200px; margin:0 auto; display:flex; gap:12px; padding:0 16px; overflow:auto }
+.subnav-inner a{ padding:6px 10px; color:var(--muted); text-decoration:none; border-radius:6px }
+
+/* Floating language control for pages without header */
+#floating-lang{ position:fixed; right:18px; bottom:18px; background:var(--surface); color:var(--text); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.2); z-index:1200; padding:8px }
+#floating-lang select{ border:1px solid rgba(0,0,0,0.06); padding:6px; border-radius:6px }
+
+/* Always-visible language FAB and menu */
+.lang-fab{ position:fixed; right:18px; top:18px; z-index:1400; background:var(--accent); color:#000; padding:10px 14px; border-radius:999px; box-shadow:0 10px 30px rgba(0,0,0,0.25); cursor:pointer; font-weight:800 }
+.lang-fab .label{ margin-left:8px; font-weight:700 }
+.lang-menu{ position:fixed; right:18px; top:64px; z-index:1400; background:var(--surface); color:var(--text); border-radius:8px; box-shadow:0 10px 30px rgba(0,0,0,0.2); display:none; min-width:180px; overflow:hidden }
+.lang-menu.active{ display:block }
+.lang-menu .lang-option{ padding:10px 12px; border-bottom:1px solid rgba(0,0,0,0.06); cursor:pointer }
+.lang-menu .lang-option:last-child{ border-bottom:0 }
+.lang-menu .lang-option:hover{ background:rgba(0,0,0,0.03) }
+
+/* Header language button (visible pill in header) */
+.lang-btn, #lang-btn{ background:var(--accent); color:var(--primary-contrast); border:0; padding:6px 10px; border-radius:8px; cursor:pointer; font-weight:700 }
+#lang-menu-header{ position:absolute; display:none; background:var(--surface); color:var(--text); border-radius:8px; box-shadow:0 8px 26px rgba(0,0,0,0.2); z-index:1200; min-width:140px; overflow:hidden }
+#lang-menu-header .lang-menu-item{ padding:8px 10px; cursor:pointer; border-bottom:1px solid rgba(0,0,0,0.04); font-size:14px }
+#lang-menu-header .lang-menu-item:hover{ background:rgba(0,0,0,0.04) }
+
+/* Ensure header/home language menus are readable in both themes */
+#home-lang-menu, #lang-menu-header, .lang-menu{ background:var(--surface) !important; color:var(--text) !important }
+#home-lang-menu .lang-option, #lang-menu-header .lang-menu-item, .lang-menu .lang-option{ color:inherit !important }
+/* Dark-mode: make menus use contrasting text and slightly translucent dark BG */
+body.dark-mode #home-lang-menu, body.dark-mode #lang-menu-header, body.dark-mode .lang-menu{ background: rgba(0,0,0,0.55) !important; color: var(--primary-contrast) !important }
+.lang-menu .lang-title{ padding:10px 12px; font-weight:700; border-bottom:1px solid rgba(0,0,0,0.06) }
+
+/* Header/Topbar contrast improvements */
+#site-header header{ background:var(--primary); color:var(--primary-contrast) }
+#site-header header a, #site-header header a:visited { color: var(--primary-contrast); opacity: 1; font-weight:600 }
+#site-header header nav a{ color: var(--primary-contrast); opacity:0.95; text-decoration:none; padding:6px 8px }
+#site-header header nav a:hover{ color: #fff; opacity:1 }
+#site-header header #lang-wrap{ background: rgba(255,255,255,0.04); padding:6px 10px; border-radius:10px }
+#site-header header #lang-select{ background: transparent; color: var(--primary-contrast); border:none; outline:none; font-weight:700 }
+#site-header header #lang-select option{ background:var(--surface); color:var(--text) }
+#site-header header #search-box{ color: var(--primary-contrast); background: rgba(255,255,255,0.04); border-radius:6px }
+#site-header header #search-box::placeholder{ color: rgba(255,255,255,0.9); opacity:1 }
+#site-header header #lang-select, #site-header header #lang-select option{ color: var(--primary-contrast) }
+#site-header header nav a{ color: var(--primary-contrast); font-weight:700 }
+#site-header header #brand-text{ color: var(--primary-contrast); font-weight:800 }
+
+/* Make header taller and logo more prominent */
+#site-header header{ padding:14px 0 }
+#site-header header img{ height:40px }
+#site-header header #brand-text{ font-size:20px }
+#site-header header #search-btn, #site-header header #search-btn:active{ background:var(--accent); color:var(--primary-contrast); }
+
+/* Utilities */
+.text-center{ text-align:center }
+.icon{ width:40px; margin-right:12px }
+
+/* Buttons */
+.btn-main{ display:inline-block; width:100%; padding:12px 16px; background:var(--accent); color:var(--primary-contrast); border-radius:8px; font-size:15px; border:none; cursor:pointer; transition: background .12s }
+.btn-main{ display:inline-block; width:100%; padding:12px 16px; background: linear-gradient(90deg,#ff7a18,#ffb650); color:var(--primary-contrast); border-radius:10px; font-size:15px; border:none; cursor:pointer; transition: transform .12s ease, box-shadow .12s ease }
+.btn-main:hover{ transform: translateY(-2px); box-shadow: 0 10px 22px rgba(255,154,0,0.08) }
+.btn-accent{ background: var(--accent); color: var(--primary-contrast) }
+
+/* Inputs */
+input, select, textarea{ width:100%; padding:12px; margin:10px 0; border:1px solid #e3e6e3; border-radius:8px; font-size:15px; box-sizing:border-box }
+
+/* File upload */
+.file-upload{ border:2px dashed rgba(0,0,0,0.08); padding:22px; text-align:center; border-radius:12px; background: linear-gradient(180deg, rgba(255,153,0,0.02), transparent); cursor:pointer }
+.file-upload:hover{ background: linear-gradient(180deg, rgba(255,153,0,0.04), transparent) }
+
+/* Card buttons / links */
+.card-btn{ display:flex; align-items:center; padding:14px; gap:12px; margin:14px 0; background: linear-gradient(180deg, rgba(255,255,255,0.9), rgba(245,252,250,0.9)); border-radius:12px; color:var(--primary-solid); font-weight:700 }
+.card-btn:hover{ transform: translateY(-3px); box-shadow: 0 18px 40px rgba(11,75,107,0.06) }
+
+/* Result box: use surface and readable text for both themes */
+.result-box{ margin-top:18px; background:var(--surface); padding:14px; border-radius:10px; border:1px solid rgba(0,0,0,0.06); color:var(--text) }
+
+/* Dark-mode result tweaks */
+body.dark-mode .result-box{ background: rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.04); color: #e6f6ea }
+
+/* Small tweaks */
+.lang-toggle{ cursor:pointer; font-weight:700; color:var(--primary) }
+
+/* Responsive container */
+.page-box{ width:90%; max-width:720px; margin:32px auto; padding:22px }
+
+/* Keep old class names compatible */
+.btn{ display:inline-block; padding:10px 14px; border-radius:8px; background:var(--primary); color:#fff }
+
+/* Homepage layout */
+.layout{ max-width:1200px; margin:18px auto; display:grid; grid-template-columns: 240px 1fr; gap:20px; padding:0 16px }
+.sidebar{ background:var(--surface); padding:12px; border-radius:8px; box-shadow:var(--card-shadow) }
+.sidebar h3{ margin:6px 0 12px; font-size:16px }
+.category-list a{ display:block; padding:10px 8px; color:#222; text-decoration:none; border-radius:6px; margin-bottom:6px }
+.category-list a:hover{ background:#f5f5f5 }
+/* active category in sidebar */
+.category-list a.active-cat{ background: linear-gradient(90deg,#ff8f00,#ffb84f); color: #fff; font-weight:700 }
+
+.main-column{ display:flex; flex-direction:column; gap:18px }
+
+/* page accents and floating cart */
+.layout, .page-box, .section-row{ border-radius:12px }
+#floating-cart{ box-shadow: 0 12px 30px rgba(255,154,0,0.12) }
+#floating-cart-count{ background:#000 !important; color:var(--accent-solid) !important; padding:4px 10px; }
+
+/* smooth link hover */
+a{ transition: color .12s ease, transform .08s ease }
+a:hover{ transform: translateY(-1px) }
+
+/* Carousel */
+.carousel{ position:relative; border-radius:12px; overflow:hidden; background: linear-gradient(120deg,#fff,#f6fbfb); min-height:220px; border:1px solid rgba(11,75,107,0.04) }
+.carousel .slides{ display:flex; transition:transform .5s ease }
+.carousel .slide{ min-width:100%; display:flex; align-items:center; justify-content:space-between; gap:18px; padding:24px }
+.carousel img{ max-height:260px; object-fit:cover; border-radius:8px; display:block; width:auto; mix-blend-mode:normal; filter: none; -webkit-filter: none }
+
+/* Make hero/carousel images more visible on dark backgrounds */
+body.dark-mode .carousel{ background: linear-gradient(120deg, #06202a 0%, #063b2f 45%, #0b2e3b 100%); }
+body.dark-mode .carousel img{ filter: brightness(1.08) saturate(1.15); -webkit-filter: brightness(1.08) saturate(1.15); }
+
+/* Add subtle frame so images pop on very dark backgrounds */
+.carousel img{ box-shadow: 0 6px 20px rgba(0,0,0,0.45); }
+.carousel .dots{ position:absolute; left:50%; transform:translateX(-50%); bottom:12px; display:flex; gap:8px }
+.carousel .dot{ width:10px; height:10px; background:#ddd; border-radius:50%; cursor:pointer }
+.carousel .dot.active{ background:var(--accent) }
+
+/* Product grid */
+.section-row{ background:var(--surface); padding:14px; border-radius:8px; box-shadow:var(--card-shadow) }
+.section-title{ display:flex; justify-content:space-between; align-items:center; margin-bottom:12px }
+.grid{ display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:12px }
+.product-card{ padding:12px; background:var(--surface); border-radius:8px; text-align:left; box-shadow:0 6px 14px rgba(0,0,0,0.04); display:flex; flex-direction:column; transition: transform .16s ease, box-shadow .16s ease }
+.product-card:hover{ transform: translateY(-6px); box-shadow: 0 20px 40px rgba(7,15,20,0.06) }
+.product-card img{ width:100%; height:140px; object-fit:cover; border-radius:6px; transition: transform .18s ease }
+.product-card img:hover{ transform: scale(1.03) }
+.product-title{ font-size:15px; margin:8px 0 4px; font-weight:700 }
+.product-meta{ color:var(--muted); font-size:13px }
+.product-price{ color:var(--accent); font-weight:800; margin-top:8px }
+.product-actions{ margin-top:auto; display:flex; gap:8px }
+
+@media (max-width:900px){ .layout{ grid-template-columns: 1fr; } .sidebar{ order:2 } .main-column{ order:1 } }
+
+/* Dark-mode specific tweaks for sidebar/category readability */
+body.dark-mode .sidebar h3 { color: #e8f6ef; }
+body.dark-mode .category-list a { color: #cfe8df; background: transparent; }
+body.dark-mode .category-list a:hover { background: rgba(255,255,255,0.04); color: #ffffff; }
+
+/* Ensure the sidebar surface is slightly lighter than page bg in dark mode */
+body.dark-mode .sidebar { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.02); }
+
+/* Make market/detect result areas readable in both themes */
+.market-card{ /* fallback for pages that define their own pale inline bg */
+  background: var(--surface);
+  color: var(--text);
+  border-left: 6px solid #2f8f46;
+  padding: 16px;
+  margin-bottom: 15px;
+  border-radius: 12px;
+  box-shadow: var(--card-shadow);
+}
+body.dark-mode .market-card{
+  background: rgba(255,255,255,0.02);
+  color: #e6f6ea;
+  border-left-color: #6cc78a;
+}
+
+/* Detect page result (overrides inline styles) */
+#result, .result-box{ /* apply to both specific id and shared class */
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border: 1px solid rgba(0,0,0,0.06) !important;
+  padding: 14px !important;
+  border-radius: 8px !important;
+}
+body.dark-mode #result, body.dark-mode .result-box{
+  background: rgba(255,255,255,0.02) !important;
+  color: #e6f6ea !important;
+  border: 1px solid rgba(255,255,255,0.04) !important;
+}
+
+/* Ensure paragraphs/lists inside result areas inherit readable color */
+.market-card p, #result p, #result li, .result-box p, .result-box li{ color: inherit; }
+
