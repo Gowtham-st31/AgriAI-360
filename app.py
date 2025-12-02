@@ -651,92 +651,46 @@ def update_order_by_id(order_id, updates: dict):
     return changed
 
 def send_otp_email(email, otp):
-    # Read SMTP configuration from environment variables. This avoids
-    # hard-coded credentials in source control and lets deployment set
-    # provider/credentials securely.
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASS")
-    smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.environ.get("SMTP_PORT", "465"))
-    smtp_use_ssl = os.environ.get("SMTP_USE_SSL", "1") in ("1", "true", "True")
-
-    # Allow an explicit SendGrid-verified sender to be provided via env.
-    # If `SMTP_USER` isn't set (we're using SendGrid only), set `sender`
-    # from `SENDGRID_FROM` so SendGrid 'from' matches a verified identity.
-    sendgrid_from = os.environ.get("SENDGRID_FROM")
-    sender = smtp_user if smtp_user else (sendgrid_from if sendgrid_from else "no-reply@example.com")
-
-    msg = MIMEText(f"Your OTP for login/signup is: {otp}")
-    msg["Subject"] = "Your OTP Verification"
-    msg["From"] = sender
-    msg["To"] = email
-
-    # If SMTP credentials are provided, attempt to send email.
-    last_exc = None
-    if smtp_user and smtp_pass:
-        try:
-            # Optionally enable verbose smtplib debug output by setting SMTP_DEBUG=1
-            smtp_debug = os.environ.get("SMTP_DEBUG", "0") in ("1", "true", "True")
-            if smtp_use_ssl:
-                with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
-                    if smtp_debug:
-                        server.set_debuglevel(1)
-                    server.login(smtp_user, smtp_pass)
-                    server.sendmail(sender, email, msg.as_string())
-                    print(f"[SMTP] Message accepted for delivery to {email} via {smtp_host}:{smtp_port}")
-                    return
-            else:
-                with smtplib.SMTP(smtp_host, smtp_port) as server:
-                    if smtp_debug:
-                        server.set_debuglevel(1)
-                    server.starttls()
-                    server.login(smtp_user, smtp_pass)
-                    server.sendmail(sender, email, msg.as_string())
-                    print(f"[SMTP] Message accepted for delivery to {email} via {smtp_host}:{smtp_port}")
-                    return
-        except smtplib.SMTPAuthenticationError as e:
-            # Provide clearer guidance for Gmail auth errors
-            last_exc = Exception("SMTP authentication failed. For Gmail, ensure you created an App Password or enabled SMTP access. See https://support.google.com/mail/?p=BadCredentials")
-        except Exception as e:
-            # Common failure here is DNS/host resolution (getaddrinfo) or network/connectivity.
-            # Wrap that with a clearer message so the UI can show actionable guidance.
-            msg = str(e)
-            if isinstance(e, socket.gaierror) or "getaddrinfo" in msg or "Name or service not known" in msg:
-                last_exc = Exception(f"SMTP host resolution failed for '{smtp_host}': {msg}. Check network/DNS/settings.")
-            else:
-                last_exc = e
-
-    # If SMTP failed or wasn't configured, try SendGrid API if configured
     sendgrid_key = os.environ.get("SENDGRID_API_KEY")
-    if sendgrid_key:
-        try:
-            payload = {
-                "personalizations": [{"to": [{"email": email}], "subject": "Your OTP Verification"}],
-                "from": {"email": sender},
-                "content": [{"type": "text/plain", "value": f"Your OTP for login/signup is: {otp}"}]
-            }
-            headers = {
-                "Authorization": f"Bearer {sendgrid_key}",
-                "Content-Type": "application/json"
-            }
-            r = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers, timeout=10)
-            if r.status_code >= 200 and r.status_code < 300:
-                print(f"[SendGrid] Message accepted for delivery to {email} (status {r.status_code})")
-                return
-            else:
-                last_exc = Exception(f"SendGrid send failed: {r.status_code} {r.text}")
-        except Exception as e:
-            last_exc = e
+    sender = os.environ.get("SENDGRID_FROM")
 
-    # If we reach here, no provider succeeded. If running in development
-    # and no provider configured, print OTP for convenience.
-    if not smtp_user and not sendgrid_key:
-        print(f"[DEV MODE] SMTP/SendGrid not configured. OTP for {email}: {otp}")
+    if not sendgrid_key or not sender:
+        print(f"[DEV MODE] No SendGrid configured. OTP for {email}: {otp}")
         return
 
-    # Otherwise raise the last exception so caller can handle/report it
-    if last_exc:
-        raise last_exc
+    try:
+        payload = {
+            "personalizations": [{
+                "to": [{"email": email}],
+                "subject": "Your OTP Verification"
+            }],
+            "from": {"email": sender},
+            "content": [{
+                "type": "text/html",
+                "value": f"<h2>Your OTP is: <b>{otp}</b></h2>"
+            }]
+        }
+
+        headers = {
+            "Authorization": f"Bearer {sendgrid_key}",
+            "Content-Type": "application/json"
+        }
+
+        r = requests.post(
+            "https://api.sendgrid.com/v3/mail/send",
+            json=payload,
+            headers=headers,
+            timeout=10
+        )
+
+        if 200 <= r.status_code < 300:
+            print(f"[SendGrid] OTP email sent to {email}")
+        else:
+            print(f"[SendGrid ERROR] {r.status_code}: {r.text}")
+
+    except Exception as e:
+        print("[SendGrid Exception]", e)
+
 @app.route("/auth/request_otp", methods=["POST"])
 def request_otp():
     data = request.json
