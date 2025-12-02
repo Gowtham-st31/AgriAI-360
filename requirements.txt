@@ -1,8 +1,15 @@
+Flask==3.1.2
+Werkzeug==3.1.3
 python-dotenv>=1.0.0
-# (Other project deps already used: flask, flask-cors, tensorflow, pillow, numpy, requests, beautifulsoup4, apscheduler)
-
+flask-cors
+tensorflow
+pillow
+numpy
 requests>=2.0.0
+beautifulsoup4
+apscheduler
 
-# MongoDB client
 pymongo
 dnspython
+
+gunicorn
