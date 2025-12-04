@@ -21,6 +21,7 @@ import hashlib
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 
+
 # ============================
 # 🔥 MODEL DOWNLOAD + LOAD
 # ============================
@@ -28,49 +29,44 @@ from apscheduler.schedulers.background import BackgroundScheduler
 MODEL_URL = "https://drive.google.com/uc?export=download&id=1nn-JVOCSpMqYSNE6Vy0TQ9nq251M94BI"
 MODEL_PATH = "model.keras"
 
+
 def download_from_drive():
-    print("\n📥 Requesting large file from Google Drive...\n")
+    print("\n📥 Requesting large model from Google Drive...\n")
     session = requests.Session()
-
     response = session.get(MODEL_URL, stream=True)
-    token = None
 
-    # Check for Google confirmation token for large files
+    token = None
     for key, value in response.cookies.items():
         if key.startswith("download_warning"):
             token = value
             break
 
-    if token:   # Large file → need second request
-        print("⚠️ Large file detected — requesting confirmation...")
+    if token:
+        print("⚠️ Large file detected — confirming download...")
         params = {"id": "1nn-JVOCSpMqYSNE6Vy0TQ9nq251M94BI", "confirm": token}
         response = session.get(MODEL_URL, params=params, stream=True)
 
-    print("⬇ Saving model file... This may take few minutes...\n")
+    print("⬇ Saving model... may take a while\n")
     with open(MODEL_PATH, "wb") as f:
         for chunk in response.iter_content(32768):
             if chunk:
                 f.write(chunk)
 
-    print("\n✅ Model download complete!\n")
+    print("✅ Model saved successfully as model.keras\n")
 
 
-# ---------------- LOAD MODEL ---------------------
-model = None  # initialized empty
+# ------------------ LOAD MODEL ON DEMAND ------------------
+model = None
 
 def load_model_lazy():
     global model
     if model is None:
         if not os.path.exists(MODEL_PATH):
             download_from_drive()
-
-        print("📦 Loading model into memory...")
+        print("📦 Loading .keras model...")
         model = tf.keras.models.load_model(MODEL_PATH)
-        print("🚀 Model loaded successfully!")
+        print("🚀 Model Loaded Successfully!")
     return model
-
-
-
 
 # Load .env if available (python-dotenv optional)
 try:
