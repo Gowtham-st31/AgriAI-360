@@ -1,13 +1,41 @@
 # app.py
+# app.py
 import re
 import os
+import requests
 import io
 import json
 import smtplib
 import random
 from email.mime.text import MIMEText
 import time
+import tensorflow as tf
 from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, send_from_directory, session, redirect, make_response, has_request_context
+from flask_cors import CORS
+from functools import wraps  # 🔥 FIXED
+import socket                # 🔥 moved here
+import inspect
+import hashlib
+from bs4 import BeautifulSoup
+from apscheduler.schedulers.background import BackgroundScheduler
+
+# ============================
+# 🔥 MODEL DOWNLOAD + LOAD
+# ============================
+MODEL_URL = "https://drive.google.com/uc?export=download&id=1nn-JVOCSpMqYSNE6Vy0TQ9nq251M94BI"
+MODEL_PATH = "model.keras"
+
+if not os.path.exists(MODEL_PATH):
+    print("\n📥 Downloading model from Google Drive...\n")
+    r = requests.get(MODEL_URL, allow_redirects=True)
+    with open(MODEL_PATH, "wb") as f:
+        f.write(r.content)
+    print("\n✅ Model downloaded successfully.\n")
+
+model = tf.keras.models.load_model(MODEL_PATH)
+print("\n🚀 Model loaded successfully & ready!\n")
+
 
 # Load .env if available (python-dotenv optional)
 try:
@@ -16,9 +44,6 @@ try:
 except Exception:
     pass
 
-from flask import Flask, request, jsonify, send_from_directory, session, redirect, make_response, has_request_context
-from flask_cors import CORS
-from functools import wraps
 
 # Optional MongoDB support (pymongo)
 try:
@@ -41,12 +66,7 @@ try:
 except Exception:
     Image = None
     print("Warning: PIL (Pillow) not installed; image preprocessing disabled.")
-import requests
-import socket
-import inspect
-import hashlib
-from bs4 import BeautifulSoup
-from apscheduler.schedulers.background import BackgroundScheduler
+
 
 # -----------------------------------------------------
 #   FLASK CONFIG
