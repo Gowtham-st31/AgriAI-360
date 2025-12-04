@@ -831,6 +831,11 @@ def admin_test_smtp():
         return {"success": True, "message": f"Test email sent to {email}"}
     except Exception as e:
         return {"success": False, "message": str(e)}, 500
+@app.route("/test_email")
+def test_email():
+    send_otp_email("agriai360@gmail.com", "999999")  # change email
+    return "Test email sent!"
+
 
 
 @app.route("/auth/register", methods=["POST"])
