@@ -706,45 +706,33 @@ def update_order_by_id(order_id, updates: dict):
     return changed
 
 def send_otp_email(email, otp):
-    sendgrid_key = os.environ.get("SENDGRID_API_KEY")
-    sender = os.environ.get("SENDGRID_FROM")  # your gmail ex: agriai360@gmail.com
+    import os
+    import smtplib
+    from email.mime.text import MIMEText
 
-    if not sendgrid_key or not sender:
-        print(f"[DEV MODE] No SendGrid configured. OTP for {email}: {otp}")
+    host = os.environ.get("SMTP_HOST", "smtp-relay.brevo.com")
+    port = int(os.environ.get("SMTP_PORT", 587))
+    user = os.environ.get("SMTP_USER")  # 9d4bc6001@smtp-brevo.com
+    pwd  = os.environ.get("SMTP_PASS")  # Brevo SMTP Password
+
+    if not user or not pwd:
+        print("❌ SMTP variables missing! OTP =", otp)
         return
 
+    msg = MIMEText(f"<h2>Your OTP is <b>{otp}</b></h2>", "html")
+    msg["Subject"] = "Your OTP Verification"
+    msg["From"] = user
+    msg["To"] = email
+
     try:
-        payload = {
-            "personalizations": [{
-                "to": [{"email": email}],
-                "subject": "Your OTP Verification"
-            }],
-            "from": {"email": sender, "name": "AgriAI-360"},
-            "reply_to": {"email": sender},  # improves deliverability!
-            
-            "content": [
-                # TEXT VERSION (required for inbox delivery)
-                {"type": "text/plain", "value": f"Your OTP is {otp}"},
-
-                # HTML VERSION
-                {"type": "text/html", "value": f"<h3>Your OTP is <b>{otp}</b></h3>"}
-            ]
-        }
-
-        headers = {
-            "Authorization": f"Bearer {sendgrid_key}",
-            "Content-Type": "application/json"
-        }
-
-        r = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers)
-
-        if 200 <= r.status_code < 300:
-            print(f"[SendGrid ✓] OTP sent to {email}")
-        else:
-            print(f"[SendGrid ❌] {r.status_code}: {r.text}")
-
+        server = smtplib.SMTP(host, port)
+        server.starttls()
+        server.login(user, pwd)
+        server.sendmail(user, email, msg.as_string())
+        server.quit()
+        print(f"📩 OTP Sent Successfully to {email}")
     except Exception as e:
-        print("[SendGrid Exception]", e)
+        print("❌ Email Sending Error:", e)
 
 
 @app.route("/auth/request_otp", methods=["POST"])
