@@ -1,5 +1,6 @@
 # app.py
 # app.py
+import numpy as np
 import re
 import os
 import requests
@@ -23,18 +24,52 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # ============================
 # 🔥 MODEL DOWNLOAD + LOAD
 # ============================
+
 MODEL_URL = "https://drive.google.com/uc?export=download&id=1nn-JVOCSpMqYSNE6Vy0TQ9nq251M94BI"
 MODEL_PATH = "model.keras"
 
-if not os.path.exists(MODEL_PATH):
-    print("\n📥 Downloading model from Google Drive...\n")
-    r = requests.get(MODEL_URL, allow_redirects=True)
-    with open(MODEL_PATH, "wb") as f:
-        f.write(r.content)
-    print("\n✅ Model downloaded successfully.\n")
+def download_from_drive():
+    print("\n📥 Requesting large file from Google Drive...\n")
+    session = requests.Session()
 
-model = tf.keras.models.load_model(MODEL_PATH)
-print("\n🚀 Model loaded successfully & ready!\n")
+    response = session.get(MODEL_URL, stream=True)
+    token = None
+
+    # Check for Google confirmation token for large files
+    for key, value in response.cookies.items():
+        if key.startswith("download_warning"):
+            token = value
+            break
+
+    if token:   # Large file → need second request
+        print("⚠️ Large file detected — requesting confirmation...")
+        params = {"id": "1nn-JVOCSpMqYSNE6Vy0TQ9nq251M94BI", "confirm": token}
+        response = session.get(MODEL_URL, params=params, stream=True)
+
+    print("⬇ Saving model file... This may take few minutes...\n")
+    with open(MODEL_PATH, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
+
+    print("\n✅ Model download complete!\n")
+
+
+# ---------------- LOAD MODEL ---------------------
+model = None  # initialized empty
+
+def load_model_lazy():
+    global model
+    if model is None:
+        if not os.path.exists(MODEL_PATH):
+            download_from_drive()
+
+        print("📦 Loading model into memory...")
+        model = tf.keras.models.load_model(MODEL_PATH)
+        print("🚀 Model loaded successfully!")
+    return model
+
+
 
 
 # Load .env if available (python-dotenv optional)
@@ -1278,19 +1313,9 @@ def preprocess_image(img_bytes, target_size=(224,224)):
 # -----------------------------------------------------
 @app.route("/predict", methods=["POST"])
 def predict():
-    if model is None:
-        # Friendly fallback when model isn't available: return unknown disease
-        info = DEFAULT_INFO
-        return jsonify({
-            "index": None,
-            "raw_label": None,
-            "disease": "Unknown",
-            "confidence": 0.0,
-            "description": info.get("description"),
-            "remedies": info.get("remedies"),
-            "prevention": info.get("prevention"),
-            "daily_care": info.get("daily_care")
-        })
+
+    # Load model only when first request comes
+    model = load_model_lazy()  #  ⬅ IMPORTANT
 
     if "image" not in request.files:
         return jsonify({"error": "Missing image"}), 400
@@ -1322,6 +1347,7 @@ def predict():
         "prevention": info.get("prevention"),
         "daily_care": info.get("daily_care")
     })
+
 
 # -----------------------------------------------------
 #   AGMARKNET SCRAPER + CACHE SETUP
