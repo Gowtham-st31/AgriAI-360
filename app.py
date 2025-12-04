@@ -712,11 +712,11 @@ def send_otp_email(email, otp):
 
     host = os.environ.get("SMTP_HOST", "smtp-relay.brevo.com")
     port = int(os.environ.get("SMTP_PORT", 587))
-    user = os.environ.get("SMTP_USER")  # 9d4bc6001@smtp-brevo.com
-    pwd  = os.environ.get("SMTP_PASS")  # Brevo SMTP Password
+    user = os.environ.get("SMTP_USER")
+    pwd  = os.environ.get("SMTP_PASS")
 
     if not user or not pwd:
-        print("❌ SMTP variables missing! OTP =", otp)
+        print(f"❗ SMTP Credentials Missing — OTP: {otp}")
         return
 
     msg = MIMEText(f"<h2>Your OTP is <b>{otp}</b></h2>", "html")
@@ -730,7 +730,9 @@ def send_otp_email(email, otp):
         server.login(user, pwd)
         server.sendmail(user, email, msg.as_string())
         server.quit()
+
         print(f"📩 OTP Sent Successfully to {email}")
+
     except Exception as e:
         print("❌ Email Sending Error:", e)
 
