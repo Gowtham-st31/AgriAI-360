@@ -703,36 +703,34 @@ def update_order_by_id(order_id, updates: dict):
 
 import smtplib
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import os
 
+SMTP_HOST = os.environ.get("SMTP_HOST")
+SMTP_PORT = 587
+SMTP_USER = os.environ.get("SMTP_USER")
+SMTP_PASS = os.environ.get("SMTP_PASS")
+
 def send_otp_email(email, otp):
-    host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT"))
-    user = os.environ.get("SMTP_USER")
-    password = os.environ.get("SMTP_PASS")
-
-    print("\n========== SMTP SENDING OTP ==========")
-    print("SMTP Host:", host)
-    print("SMTP Port:", port)
-    print("SMTP User:", user)
-    print("Sending To:", email)
-    print("======================================\n")
-
-    msg = MIMEText(f"Your OTP is: {otp}")
-    msg["Subject"] = "Your OTP Verification"
-    msg["From"] = user
-    msg["To"] = email
-
     try:
-        server = smtplib.SMTP(host, port, timeout=20)
-        server.starttls()
-        server.login(user, password)
-        server.sendmail(user, email, msg.as_string())
-        server.quit()
-        print("\n📩 OTP Email Sent Successfully!\n")
+        msg = MIMEMultipart()
+        msg['From'] = SMTP_USER
+        msg['To'] = email
+        msg['Subject'] = "Your OTP Verification - AgriAI360"
+
+        body = f"Your OTP is: {otp}\nThis code is valid for 2 minutes."
+        msg.attach(MIMEText(body, "plain"))
+
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_USER, email, msg.as_string())
+
+        print(f"OTP sent via Brevo SMTP → {email}")
 
     except Exception as e:
-        print("\n❌ OTP Sending Failed:", e, "\n")
+        print("SMTP sending failed:", e)
+
 
 @app.route("/auth/request_otp", methods=["POST"])
 def request_otp():
