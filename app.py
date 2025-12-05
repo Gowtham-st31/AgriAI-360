@@ -707,34 +707,33 @@ def update_order_by_id(order_id, updates: dict):
             json.dump(orders, f, indent=2)
     return changed
 
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import os
+import requests
+SENDGRID_KEY = os.getenv("SENDGRID_API_KEY")
+SENDER_EMAIL = "agriai360@gmail.com"  # verified sender
 
 def send_otp_email(email, otp):
-    try:
-        print(f"📤 Sending OTP to {email}")
+    url = "https://api.sendgrid.com/v3/mail/send"
 
-        msg = MIMEMultipart()
-        msg['From'] = "agriai360@gmail.com"   # VERIFIED SENDER ONLY
-        msg['To'] = email
-        msg['Subject'] = "Your OTP Verification - AgriAI360"
+    data = {
+        "personalizations": [{
+            "to": [{"email": email}],
+            "subject": "Your OTP Verification - AgriAI360"
+        }],
+        "from": {"email": SENDER_EMAIL},
+        "content": [{
+            "type": "text/plain",
+            "value": f"Your OTP is {otp}"
+        }]
+    }
 
-        body = f"Your OTP is: {otp}\nValid for 2 minutes."
-        msg.attach(MIMEText(body, "plain"))
+    headers = {
+        "Authorization": f"Bearer {SENDGRID_KEY}",
+        "Content-Type": "application/json"
+    }
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)  # LOGIN USING BREVO CREDENTIALS
-            server.sendmail("agriai360@gmail.com", email, msg.as_string())
+    r = requests.post(url, json=data, headers=headers)
 
-        print(f"✔ OTP Sent Successfully to {email}")
-        return True
-
-    except Exception as e:
-        print("❌ SMTP ERROR:", e)
-        return False
+    return r.status_code == 202
 
 
 @app.route("/auth/request_otp", methods=["POST"])
