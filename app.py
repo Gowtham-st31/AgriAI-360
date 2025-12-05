@@ -734,28 +734,30 @@ def send_otp_email(email, otp):
 
 @app.route("/auth/request_otp", methods=["POST"])
 def request_otp():
-    data = request.json
-    email = data.get("email")
-
-    if not email:
-        return {"success": False, "message": "Email required"}
-
-    otp = random.randint(100000, 999999)
-
-    session["otp"] = otp
-    session["email"] = email
-
     try:
-        send_otp_email(email, otp)
-        return {"success": True, "message": "OTP sent successfully"}
+        data = request.get_json()
+        email = data.get("email")
+
+        if not email:
+            return jsonify({"success": False, "message": "Email required"}), 400
+
+        otp = str(random.randint(100000, 999999))
+
+        # store otp in session
+        session["otp"] = otp
+        session["otp_email"] = email
+
+        print("🔥 Sending OTP:", otp, "to", email)
+
+        # send mail via Brevo SMTP
+        if send_otp_email(email, otp):
+            return jsonify({"success": True, "message": "OTP sent to email"})
+        else:
+            return jsonify({"success": False, "message": "SMTP failed"})
+
     except Exception as e:
-        # Do NOT delete the session OTP; keep it so the user can still verify
-        # while we troubleshoot email delivery. Log the error and the OTP to
-        # the server console for debugging. Return success to the client but
-        # include the send error for visibility.
-        print("send_otp_email error:", e)
-        print(f"[WARN] OTP for {email}: {otp}")
-        return {"success": True, "message": f"OTP generated but sending failed: {str(e)}. Check server logs for OTP."}
+        return jsonify({"success": False, "message": str(e)})
+
 @app.route("/auth/verify_otp", methods=["POST"])
 def verify_otp():
     data = request.json
