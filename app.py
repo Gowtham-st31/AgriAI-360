@@ -711,13 +711,12 @@ def send_otp_email(email, otp):
     user = os.environ.get("SMTP_USER")
     password = os.environ.get("SMTP_PASS")
 
-    print("\n========== EMAIL DEBUG ==========")
-    print("SMTP_HOST:", host)
-    print("SMTP_PORT:", port)
-    print("SMTP_USER:", user)
-    print("Sending to:", email)
-    print("OTP:", otp)
-    print("=================================\n")
+    print("\n========== SMTP SENDING OTP ==========")
+    print("SMTP Host:", host)
+    print("SMTP Port:", port)
+    print("SMTP User:", user)
+    print("Sending To:", email)
+    print("======================================\n")
 
     msg = MIMEText(f"Your OTP is: {otp}")
     msg["Subject"] = "Your OTP Verification"
@@ -725,18 +724,15 @@ def send_otp_email(email, otp):
     msg["To"] = email
 
     try:
-        server = smtplib.SMTP(host, port, timeout=15)
-        server.set_debuglevel(1)  # 🔥 SHOW LIVE SMTP RESPONSE
+        server = smtplib.SMTP(host, port, timeout=20)
         server.starttls()
         server.login(user, password)
         server.sendmail(user, email, msg.as_string())
         server.quit()
-        print("✔✔ OTP Sent Successfully ✔✔")
+        print("\n📩 OTP Email Sent Successfully!\n")
 
     except Exception as e:
-        print("❌ EMAIL SEND FAILED:", e)
-
-
+        print("\n❌ OTP Sending Failed:", e, "\n")
 
 @app.route("/auth/request_otp", methods=["POST"])
 def request_otp():
