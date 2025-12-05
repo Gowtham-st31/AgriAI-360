@@ -701,36 +701,41 @@ def update_order_by_id(order_id, updates: dict):
             json.dump(orders, f, indent=2)
     return changed
 
+import smtplib
+from email.mime.text import MIMEText
+import os
+
 def send_otp_email(email, otp):
-    import os
-    import smtplib
-    from email.mime.text import MIMEText
-
-    host = os.environ.get("SMTP_HOST", "smtp-relay.brevo.com")
-    port = int(os.environ.get("SMTP_PORT", 587))
+    host = os.environ.get("SMTP_HOST")
+    port = int(os.environ.get("SMTP_PORT"))
     user = os.environ.get("SMTP_USER")
-    pwd  = os.environ.get("SMTP_PASS")
+    password = os.environ.get("SMTP_PASS")
 
-    if not user or not pwd:
-        print(f"❗ SMTP Credentials Missing — OTP: {otp}")
-        return
+    print("\n========== EMAIL DEBUG ==========")
+    print("SMTP_HOST:", host)
+    print("SMTP_PORT:", port)
+    print("SMTP_USER:", user)
+    print("Sending to:", email)
+    print("OTP:", otp)
+    print("=================================\n")
 
-    msg = MIMEText(f"<h2>Your OTP is <b>{otp}</b></h2>", "html")
+    msg = MIMEText(f"Your OTP is: {otp}")
     msg["Subject"] = "Your OTP Verification"
     msg["From"] = user
     msg["To"] = email
 
     try:
-        server = smtplib.SMTP(host, port)
+        server = smtplib.SMTP(host, port, timeout=15)
+        server.set_debuglevel(1)  # 🔥 SHOW LIVE SMTP RESPONSE
         server.starttls()
-        server.login(user, pwd)
+        server.login(user, password)
         server.sendmail(user, email, msg.as_string())
         server.quit()
-
-        print(f"📩 OTP Sent Successfully to {email}")
+        print("✔✔ OTP Sent Successfully ✔✔")
 
     except Exception as e:
-        print("❌ Email Sending Error:", e)
+        print("❌ EMAIL SEND FAILED:", e)
+
 
 
 @app.route("/auth/request_otp", methods=["POST"])
