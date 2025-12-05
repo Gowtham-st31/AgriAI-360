@@ -20,6 +20,12 @@ import inspect
 import hashlib
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
+# ================== SMTP Mail Config ==================
+SMTP_HOST = "smtp-relay.brevo.com"
+SMTP_PORT = 587
+SMTP_USER = "9d4bc6001@smtp-brevo.com"   # Your login from Brevo
+SMTP_PASS = "YC3wjLyInA6RFBba"           # Your SMTP password
+
 
 
 # ============================
@@ -708,25 +714,28 @@ import os
 
 def send_otp_email(email, otp):
     try:
-        msg = MIMEMultipart()
-        msg["From"] = SMTP_USER
-        msg["To"] = email
-        msg["Subject"] = "Your OTP Verification - AgriAI360"
+        print(f"📤 Sending OTP to {email}")
 
-        body = f"Your OTP is: {otp}\nThis code is valid for 2 minutes."
+        msg = MIMEMultipart()
+        msg['From'] = "agriai360@gmail.com"   # VERIFIED SENDER ONLY
+        msg['To'] = email
+        msg['Subject'] = "Your OTP Verification - AgriAI360"
+
+        body = f"Your OTP is: {otp}\nValid for 2 minutes."
         msg.attach(MIMEText(body, "plain"))
 
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SMTP_USER, email, msg.as_string())
+            server.login(SMTP_USER, SMTP_PASS)  # LOGIN USING BREVO CREDENTIALS
+            server.sendmail("agriai360@gmail.com", email, msg.as_string())
 
-        print(f"✔ OTP Email Sent → {email}")
-        return True   # REQUIRED
+        print(f"✔ OTP Sent Successfully to {email}")
+        return True
 
     except Exception as e:
-        print("❌ SMTP Error:", e)
+        print("❌ SMTP ERROR:", e)
         return False
+
 
 @app.route("/auth/request_otp", methods=["POST"])
 def request_otp():
@@ -756,47 +765,34 @@ def request_otp():
 
 @app.route("/auth/verify_otp", methods=["POST"])
 def verify_otp():
-    data = request.json
+    data = request.get_json()
     user_otp = data.get("otp")
 
-    if "otp" not in session:
+    if "otp" not in session or "otp_email" not in session:
         return {"success": False, "message": "OTP not generated"}
 
-    if int(user_otp) != session["otp"]:
+    # OTP stored as string → compare string
+    if user_otp != session["otp"]:
         return {"success": False, "message": "Invalid OTP"}
 
-    email = session.get("email")
+    email = session.get("otp_email")  # FIXED ⬅ correct source
     users = load_users()
 
-    # admin login
-    if email and email.lower() in ADMIN_EMAILS:
+    # ADMIN LOGIN
+    if email.lower() in ADMIN_EMAILS:
         session["admin"] = True
-        # also set a user identity for admin pages
-        session["user"] = "admin"
+        session["user"] = email
         return {"success": True, "role": "admin", "redirect": "/admin/dashboard"}
 
-    # If this was a registration flow with password pending, create the user with password
-    if session.get("register_email") and session.get("register_password_hash"):
-        reg_email = session.pop("register_email")
-        reg_hash = session.pop("register_password_hash")
-        users = load_users()
-        exists = any(u.get("email") == reg_email for u in users.get("users", []))
-        if not exists:
-            users.setdefault("users", []).append({"email": reg_email, "password": reg_hash})
-            save_users(users)
-        session["user"] = reg_email
-        return {"success": True, "role": "user"}
-
-    # otherwise normal OTP login/2FA
+    # NORMAL LOGIN
     exists = any(u.get("email") == email for u in users.get("users", []))
-
     if not exists:
-        # create new user without password
         users.setdefault("users", []).append({"email": email})
         save_users(users)
 
     session["user"] = email
     return {"success": True, "role": "user", "redirect": "/home"}
+
 @app.route("/login")
 def login_page():
     # If already authenticated, send the user to their dashboard instead
