@@ -706,17 +706,12 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
 
-SMTP_HOST = os.environ.get("SMTP_HOST")
-SMTP_PORT = 587
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASS = os.environ.get("SMTP_PASS")
-
 def send_otp_email(email, otp):
     try:
         msg = MIMEMultipart()
-        msg['From'] = SMTP_USER
-        msg['To'] = email
-        msg['Subject'] = "Your OTP Verification - AgriAI360"
+        msg["From"] = SMTP_USER
+        msg["To"] = email
+        msg["Subject"] = "Your OTP Verification - AgriAI360"
 
         body = f"Your OTP is: {otp}\nThis code is valid for 2 minutes."
         msg.attach(MIMEText(body, "plain"))
@@ -726,11 +721,12 @@ def send_otp_email(email, otp):
             server.login(SMTP_USER, SMTP_PASS)
             server.sendmail(SMTP_USER, email, msg.as_string())
 
-        print(f"OTP sent via Brevo SMTP → {email}")
+        print(f"✔ OTP Email Sent → {email}")
+        return True   # REQUIRED
 
     except Exception as e:
-        print("SMTP sending failed:", e)
-
+        print("❌ SMTP Error:", e)
+        return False
 
 @app.route("/auth/request_otp", methods=["POST"])
 def request_otp():
