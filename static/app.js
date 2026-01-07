@@ -77,7 +77,7 @@ document.getElementById("checkPrice").onclick = async () => {
   const st = document.getElementById("state").value;
   const mk = document.getElementById("market").value;
 
-  const params = new URLSearchParams({ commodity: c, state: st, market: mk });
+  const params = new URLSearchParams({ commodity: c, state: st, market: mk, ai: '1' });
   const res = await fetch(`/price?${params}`);
   const data = await res.json();
 
@@ -88,6 +88,34 @@ document.getElementById("checkPrice").onclick = async () => {
 
   // Cards
   let html = "";
+
+  // Optional AI summary
+  try {
+    if (data.ai) {
+      if (data.ai.enabled === true && data.ai.parsed && data.ai.parsed.recommended_modal_price != null) {
+        const p = data.ai.parsed;
+        const currency = p.currency || 'INR';
+        const unit = p.unit || '100kg';
+        const symbol = (currency === 'INR') ? '₹' : '';
+        html += `
+          <div class="card p-3 mt-3">
+            <b>AI Recommended Price:</b> ${symbol}${p.recommended_modal_price} / ${unit}<br>
+            ${p.rationale ? `<b>Why:</b> ${p.rationale}<br>` : ''}
+          </div>
+        `;
+      } else if (data.ai.enabled === false) {
+        const reason = data.ai.reason || 'AI summary unavailable';
+        html += `
+          <div class="card p-3 mt-3">
+            <b>AI Summary:</b> ${reason}
+          </div>
+        `;
+      }
+    }
+  } catch (e) {
+    // ignore AI rendering errors
+  }
+
   data.data.forEach(item => {
     html += `
       <div class="card p-3 mt-3">

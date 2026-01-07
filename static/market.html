@@ -75,6 +75,7 @@
     </div>
 
     <h3 style="margin-top:20px;" data-i18n="market.data">Market Data</h3>
+    <div id="aiBox"></div>
     <div id="resultBox"></div>
 
     <hr style="margin:24px 0">
@@ -95,8 +96,9 @@ function getPrice() {
     }
 
     document.getElementById("resultBox").innerHTML = "<p>Loading...</p>";
+    document.getElementById("aiBox").innerHTML = "";
 
-    fetch(`/price?commodity=${encodeURIComponent(c)}`)
+    fetch(`/price?commodity=${encodeURIComponent(c)}&ai=1`)
         .then(res => res.json())
         .then(data => {
             if (!data.success) {
@@ -106,12 +108,64 @@ function getPrice() {
             }
 
             MARKET_DATA = data.data;
+            displayAiSummary(data.ai);
             displayResults(MARKET_DATA);
         })
         .catch(err => {
             document.getElementById("resultBox").innerHTML =
                 "<p style='color:red;'>Could not connect to server</p>";
         });
+}
+
+function displayAiSummary(ai) {
+    const box = document.getElementById('aiBox');
+    if (!box) return;
+
+    if (!ai) {
+        box.innerHTML = "";
+        return;
+    }
+
+    if (ai.enabled !== true) {
+        const reason = ai.reason || 'AI summary unavailable';
+        box.innerHTML = `
+          <div class="market-card">
+            <p><b>AI Summary:</b> ${reason}</p>
+          </div>
+        `;
+        return;
+    }
+
+    const parsed = ai.parsed || null;
+    if (!parsed || typeof parsed !== 'object') {
+                box.innerHTML = `
+                    <div class="market-card">
+                        <p><b>AI Summary:</b> Could not parse model response</p>
+                    </div>
+                `;
+        return;
+    }
+
+    const price = parsed.recommended_modal_price;
+    const currency = parsed.currency || 'INR';
+    const unit = parsed.unit || '100kg';
+    const rationale = parsed.rationale || '';
+
+    if (price === undefined || price === null || price === '') {
+                box.innerHTML = `
+                    <div class="market-card">
+                        <p><b>AI Summary:</b> No recommended price returned</p>
+                    </div>
+                `;
+        return;
+    }
+
+    box.innerHTML = `
+      <div class="market-card">
+        <p><b>AI Recommended Price:</b> ${currency === 'INR' ? '₹' : ''}${price} / ${unit}</p>
+        ${rationale ? `<p><b>Why:</b> ${rationale}</p>` : ''}
+      </div>
+    `;
 }
 
 // Display market cards

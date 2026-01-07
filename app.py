@@ -1,6 +1,5 @@
 # app.py
 # app.py
-import numpy as np
 import re
 import os
 import requests
@@ -10,7 +9,8 @@ import smtplib
 import random
 from email.mime.text import MIMEText
 import time
-import tensorflow as tf
+import ssl
+import threading
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_from_directory, session, redirect, make_response, has_request_context
 from flask_cors import CORS
@@ -20,11 +20,10 @@ import inspect
 import hashlib
 from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
+
 # ================== SMTP Mail Config ==================
-SMTP_HOST = "smtp-relay.brevo.com"
-SMTP_PORT = 587
-SMTP_USER = "9d4bc6001@smtp-brevo.com"   # Your login from Brevo
-SMTP_PASS = "YC3wjLyInA6RFBba"           # Your SMTP password
+# SMTP is configured via environment variables (optionally via .env).
+# See `.env.example` for supported settings.
 
 
 
@@ -66,6 +65,8 @@ model = None
 
 def load_model_lazy():
     global model
+    if tf is None:
+        raise RuntimeError('tensorflow not installed; install tensorflow to enable disease prediction')
     if model is None:
         if not os.path.exists(MODEL_PATH):
             download_from_drive()
@@ -75,10 +76,13 @@ def load_model_lazy():
     return model
 
 # Load .env if available (python-dotenv optional)
+# Use an explicit path so it works even when the process CWD differs (e.g., Render/Gunicorn).
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    _dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+    load_dotenv(dotenv_path=_dotenv_path, override=False)
 except Exception:
+    # If python-dotenv isn't installed, env vars must be set by the host.
     pass
 
 
@@ -123,7 +127,13 @@ mongo_db = None
 MONGODB_URI = os.environ.get('MONGODB_URI')
 if MONGODB_URI and MongoClient is not None:
     try:
-        mongo_client = MongoClient(MONGODB_URI)
+        # Use short timeouts so the app doesn't hang on startup/deploy if Mongo is unreachable.
+        mongo_client = MongoClient(
+            MONGODB_URI,
+            serverSelectionTimeoutMS=int(os.environ.get('MONGODB_SERVER_SELECTION_TIMEOUT_MS', '2000')),
+            connectTimeoutMS=int(os.environ.get('MONGODB_CONNECT_TIMEOUT_MS', '2000')),
+            socketTimeoutMS=int(os.environ.get('MONGODB_SOCKET_TIMEOUT_MS', '2000')),
+        )
         # Determine DB name: prefer explicit env var, else driver default, else 'agri'
         mongo_dbname = os.environ.get('MONGODB_DB')
         if not mongo_dbname:
@@ -516,6 +526,10 @@ def find_user(email: str):
 def get_orders_collection():
     return mongo_db.get_collection('orders') if mongo_db is not None else None
 
+
+def get_today_deals_collection():
+    return mongo_db.get_collection('today_deals') if mongo_db is not None else None
+
 def read_orders():
     # Return list of orders from Mongo or fallback file
     try:
@@ -538,6 +552,17 @@ def read_today_deals():
     """Read admin-marked today's deals IDs from data/today_deals.json (list of ids).
        Returns list of ints.
     """
+    # Prefer MongoDB on hosted deployments (Render filesystem is ephemeral)
+    try:
+        coll = get_today_deals_collection()
+        if coll is not None:
+            doc = coll.find_one({'_id': 'today_deals'}, {'_id': 0})
+            ids = (doc or {}).get('ids')
+            if isinstance(ids, list):
+                return [int(x) for x in ids]
+    except Exception as e:
+        print('read_today_deals -> mongo error:', e)
+
     fn = os.path.join(os.path.dirname(__file__), 'data', 'today_deals.json')
     try:
         with open(fn, 'r', encoding='utf-8') as f:
@@ -550,10 +575,24 @@ def read_today_deals():
 
 
 def save_today_deals(id_list):
+    # Prefer MongoDB on hosted deployments (Render filesystem is ephemeral)
+    try:
+        coll = get_today_deals_collection()
+        if coll is not None:
+            ids = [int(x) for x in (id_list or [])]
+            coll.replace_one(
+                {'_id': 'today_deals'},
+                {'_id': 'today_deals', 'ids': ids, 'updated_at': datetime.utcnow().isoformat() + 'Z'},
+                upsert=True
+            )
+            return True
+    except Exception as e:
+        print('save_today_deals -> mongo error:', e)
+
     fn = os.path.join(os.path.dirname(__file__), 'data', 'today_deals.json')
     try:
         with open(fn, 'w', encoding='utf-8') as f:
-            json.dump([int(x) for x in id_list], f, indent=2)
+            json.dump([int(x) for x in (id_list or [])], f, indent=2)
         return True
     except Exception as e:
         print('save_today_deals error:', e)
@@ -707,33 +746,211 @@ def update_order_by_id(order_id, updates: dict):
             json.dump(orders, f, indent=2)
     return changed
 
-import requests
-SENDGRID_KEY = os.getenv("SENDGRID_API_KEY")
-SENDER_EMAIL = "agriai360@gmail.com"  # verified sender
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import os
+
+def _smtp_config():
+    """Read SMTP settings from environment.
+
+    Supported:
+      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
+      SMTP_FROM, SMTP_USE_SSL, SMTP_USE_STARTTLS,
+      SMTP_TIMEOUT, SMTP_RETRIES
+    """
+    host = (os.environ.get('SMTP_HOST') or '').strip()
+    port_raw = (os.environ.get('SMTP_PORT') or '').strip()
+    user = (os.environ.get('SMTP_USER') or '').strip()
+    password = (os.environ.get('SMTP_PASS') or '').strip()
+    from_addr = (os.environ.get('SMTP_FROM') or user).strip()
+
+    # Defaults
+    port = 465
+    if port_raw:
+        try:
+            port = int(port_raw)
+        except Exception:
+            port = 465
+
+    use_ssl = str(os.environ.get('SMTP_USE_SSL') or '0').lower() in ('1', 'true', 'yes')
+    use_starttls = str(os.environ.get('SMTP_USE_STARTTLS') or '').lower() in ('1', 'true', 'yes')
+    if os.environ.get('SMTP_USE_STARTTLS') is None:
+        # If not explicitly set: default to STARTTLS when not using SSL.
+        use_starttls = not use_ssl
+
+    try:
+        timeout = float(os.environ.get('SMTP_TIMEOUT') or '10')
+    except Exception:
+        timeout = 10.0
+
+    try:
+        retries = int(os.environ.get('SMTP_RETRIES') or '2')
+    except Exception:
+        retries = 2
+
+    return {
+        'host': host,
+        'port': port,
+        'user': user,
+        'pass': password,
+        'from': from_addr,
+        'use_ssl': use_ssl,
+        'use_starttls': use_starttls,
+        'timeout': timeout,
+        'retries': max(1, retries),
+    }
+
+
+def _smtp_is_configured():
+    cfg = _smtp_config()
+    return bool(cfg['host'] and cfg['user'] and cfg['pass'] and cfg['from'])
+
+
+def _sendgrid_config():
+    api_key = (os.environ.get('SENDGRID_API_KEY') or '').strip()
+    from_addr = (os.environ.get('SENDGRID_FROM') or '').strip()
+    return {
+        'api_key': api_key,
+        'from': from_addr,
+        'timeout': 10,
+    }
+
+
+def _sendgrid_is_configured():
+    cfg = _sendgrid_config()
+    return bool(cfg['api_key'] and cfg['from'])
+
+
+def _send_via_sendgrid(to_email: str, subject: str, body_text: str):
+    cfg = _sendgrid_config()
+    if not (cfg['api_key'] and cfg['from']):
+        raise RuntimeError('SendGrid not configured: set SENDGRID_API_KEY and SENDGRID_FROM')
+
+    url = 'https://api.sendgrid.com/v3/mail/send'
+    payload = {
+        'personalizations': [{'to': [{'email': to_email}]}],
+        'from': {'email': cfg['from']},
+        'subject': subject,
+        'content': [{'type': 'text/plain', 'value': body_text}],
+    }
+
+    r = requests.post(
+        url,
+        headers={
+            'Authorization': f"Bearer {cfg['api_key']}",
+            'Content-Type': 'application/json'
+        },
+        json=payload,
+        timeout=cfg['timeout']
+    )
+
+    # SendGrid returns 202 Accepted on success
+    if r.status_code not in (200, 202):
+        raise RuntimeError(f"SendGrid error {r.status_code}: {(r.text[:500] if r.text else '')}")
+    return True
+
+
+def _email_provider():
+        """Email provider selection.
+
+        EMAIL_PROVIDER:
+            - auto (default): prefer SendGrid if configured else SMTP
+            - sendgrid: force SendGrid only
+            - smtp: force SMTP only
+        """
+        return (os.environ.get('EMAIL_PROVIDER') or 'auto').strip().lower()
+
 
 def send_otp_email(email, otp):
-    url = "https://api.sendgrid.com/v3/mail/send"
+    subject = "Your OTP Verification - AgriAI360"
+    body = f"Your OTP is: {otp}\nValid for 2 minutes."
 
-    data = {
-        "personalizations": [{
-            "to": [{"email": email}],
-            "subject": "Your OTP Verification - AgriAI360"
-        }],
-        "from": {"email": SENDER_EMAIL},
-        "content": [{
-            "type": "text/plain",
-            "value": f"Your OTP is {otp}"
-        }]
-    }
+    provider = _email_provider()
 
-    headers = {
-        "Authorization": f"Bearer {SENDGRID_KEY}",
-        "Content-Type": "application/json"
-    }
+    # Prefer HTTPS email API when configured (more reliable on hosted platforms)
+    if provider == 'sendgrid':
+        if not _sendgrid_is_configured():
+            raise RuntimeError('EMAIL_PROVIDER=sendgrid but SendGrid is not configured (set SENDGRID_API_KEY and SENDGRID_FROM)')
+        return _send_via_sendgrid(email, subject, body)
 
-    r = requests.post(url, json=data, headers=headers)
+    if provider == 'smtp':
+        # continue below (SMTP only)
+        pass
+    else:
+        # auto mode
+        if _sendgrid_is_configured():
+            return _send_via_sendgrid(email, subject, body)
 
-    return r.status_code == 202
+    cfg = _smtp_config()
+    if not (cfg['host'] and cfg['user'] and cfg['pass'] and cfg['from']):
+        if provider == 'smtp':
+            raise RuntimeError('EMAIL_PROVIDER=smtp but SMTP is not configured (set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM)')
+        raise RuntimeError('Email not configured: set SENDGRID_API_KEY+SENDGRID_FROM or SMTP_* vars')
+
+    msg = MIMEMultipart()
+    msg['From'] = cfg['from']
+    msg['To'] = email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    last_err = None
+    context = ssl.create_default_context()
+    for attempt in range(cfg['retries']):
+        try:
+            if cfg['use_ssl']:
+                with smtplib.SMTP_SSL(cfg['host'], cfg['port'], timeout=cfg['timeout'], context=context) as server:
+                    server.login(cfg['user'], cfg['pass'])
+                    server.sendmail(cfg['from'], [email], msg.as_string())
+            else:
+                with smtplib.SMTP(cfg['host'], cfg['port'], timeout=cfg['timeout']) as server:
+                    server.ehlo()
+                    if cfg['use_starttls']:
+                        server.starttls(context=context)
+                        server.ehlo()
+                    server.login(cfg['user'], cfg['pass'])
+                    server.sendmail(cfg['from'], [email], msg.as_string())
+            return True
+        except Exception as e:
+            last_err = e
+            # small backoff to reduce transient failures
+            try:
+                time.sleep(0.4 * (attempt + 1))
+            except Exception:
+                pass
+            continue
+
+    raise RuntimeError(f"SMTP send failed: {str(last_err)}")
+
+
+def send_otp_email_async(email, otp):
+    """Send OTP in a background thread so HTTP responds quickly."""
+
+    # Fail fast if nothing is configured.
+    if not (_sendgrid_is_configured() or _smtp_is_configured()):
+        raise RuntimeError('Email not configured: set SENDGRID_API_KEY+SENDGRID_FROM or SMTP_* vars')
+
+    def _runner():
+        try:
+            send_otp_email(email, otp)
+        except Exception as e:
+            print(f"[OTP] Email send failed for {email}: {e}")
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    return True
+
+
+def _send_email_now_or_async(email: str, otp: str):
+    """Send OTP either synchronously (default) or asynchronously.
+
+    Synchronous mode makes it much easier to detect delivery/config errors.
+    Set EMAIL_SEND_ASYNC=1 to switch to background-thread delivery.
+    """
+    async_enabled = str(os.environ.get('EMAIL_SEND_ASYNC', '0')).lower() in ('1', 'true', 'yes')
+    if async_enabled:
+        return send_otp_email_async(email, otp)
+    return send_otp_email(email, otp)
 
 
 @app.route("/auth/request_otp", methods=["POST"])
@@ -745,19 +962,31 @@ def request_otp():
         if not email:
             return jsonify({"success": False, "message": "Email required"}), 400
 
+        if not (_sendgrid_is_configured() or _smtp_is_configured()):
+            return jsonify({
+                "success": False,
+                "message": "Email not configured on server",
+                "hint": "Set SENDGRID_API_KEY+SENDGRID_FROM (recommended) or SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM"
+            }), 500
+
         otp = str(random.randint(100000, 999999))
 
         # store otp in session
         session["otp"] = otp
         session["otp_email"] = email
+        session["otp_expires_at"] = time.time() + 120
 
-        print("🔥 Sending OTP:", otp, "to", email)
-
-        # send mail via Brevo SMTP
-        if send_otp_email(email, otp):
+        try:
+            _send_email_now_or_async(email, otp)
             return jsonify({"success": True, "message": "OTP sent to email"})
-        else:
-            return jsonify({"success": False, "message": "SMTP failed"})
+        except Exception as e:
+            # Do not leak sensitive details; give actionable hint.
+            print(f"[OTP] send failed for {email}: {e}")
+            return jsonify({
+                "success": False,
+                "message": "Failed to send OTP email",
+                "hint": "Check SMTP/SendGrid env vars, verified sender, and spam folder. See server logs for details."
+            }), 502
 
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
@@ -770,11 +999,27 @@ def verify_otp():
     if "otp" not in session or "otp_email" not in session:
         return {"success": False, "message": "OTP not generated"}
 
+    # expiry check
+    try:
+        exp = session.get('otp_expires_at')
+        if exp and time.time() > float(exp):
+            # clear expired OTP
+            session.pop('otp', None)
+            session.pop('otp_email', None)
+            session.pop('otp_expires_at', None)
+            return {"success": False, "message": "OTP expired"}
+    except Exception:
+        pass
+
     # OTP stored as string → compare string
     if user_otp != session["otp"]:
         return {"success": False, "message": "Invalid OTP"}
 
     email = session.get("otp_email")  # FIXED ⬅ correct source
+    # one-time use
+    session.pop('otp', None)
+    session.pop('otp_email', None)
+    session.pop('otp_expires_at', None)
     users = load_users()
 
     # ADMIN LOGIN
@@ -808,6 +1053,9 @@ def admin_test_smtp():
 
     POST JSON: { "email": "you@example.com" }
     """
+    if not session.get('admin'):
+        return {"success": False, "message": "Not authorized"}, 403
+
     data = request.json or {}
     email = data.get("email")
     if not email:
@@ -815,14 +1063,16 @@ def admin_test_smtp():
 
     test_otp = random.randint(100000, 999999)
     try:
-        send_otp_email(email, test_otp)
+        send_otp_email(email, str(test_otp))
         return {"success": True, "message": f"Test email sent to {email}"}
     except Exception as e:
         return {"success": False, "message": str(e)}, 500
 @app.route("/test_email")
 def test_email():
-    send_otp_email("agriai360@gmail.com", "999999")  # change email
-    return "Test email sent!"
+    if os.environ.get('ENABLE_TEST_EMAIL') not in ('1', 'true', 'True', 'yes'):
+        return "Not found", 404
+    send_otp_email(os.environ.get('TEST_EMAIL_TO') or "test@example.com", "999999")
+    return "Test email queued"
 
 
 
@@ -846,17 +1096,20 @@ def register():
     session["register_email"] = email
     session["register_password_hash"] = p_hash
 
-    otp = random.randint(100000, 999999)
+    if not (_sendgrid_is_configured() or _smtp_is_configured()):
+        return {"success": False, "message": "Email not configured on server"}, 500
+
+    otp = str(random.randint(100000, 999999))
     session["otp"] = otp
-    session["email"] = email
+    session["otp_email"] = email
+    session["otp_expires_at"] = time.time() + 120
 
     try:
-        send_otp_email(email, otp)
+        _send_email_now_or_async(email, otp)
         return {"success": True, "message": "OTP sent for registration"}
     except Exception as e:
-        print("send_otp_email error (register):", e)
-        print(f"[WARN] OTP for {email}: {otp}")
-        return {"success": True, "message": f"OTP generated but sending failed: {str(e)}. Check server logs for OTP."}
+        print(f"[OTP] send failed for {email} (register): {e}")
+        return {"success": False, "message": "Failed to send OTP email"}, 502
 
 
 @app.route("/auth/login_password", methods=["POST"])
@@ -875,18 +1128,21 @@ def login_password():
         return {"success": False, "message": "Invalid credentials"}, 401
 
     # Password OK — start OTP 2FA
-    otp = random.randint(100000, 999999)
+    if not (_sendgrid_is_configured() or _smtp_is_configured()):
+        return {"success": False, "message": "Email not configured on server"}, 500
+
+    otp = str(random.randint(100000, 999999))
     session["otp"] = otp
-    session["email"] = email
+    session["otp_email"] = email
+    session["otp_expires_at"] = time.time() + 120
     session["login_via_password"] = True
 
     try:
-        send_otp_email(email, otp)
+        _send_email_now_or_async(email, otp)
         return {"success": True, "message": "OTP sent for login"}
     except Exception as e:
-        print("send_otp_email error (login_password):", e)
-        print(f"[WARN] OTP for {email}: {otp}")
-        return {"success": True, "message": f"OTP generated but sending failed: {str(e)}. Check server logs for OTP."}
+        print(f"[OTP] send failed for {email} (login): {e}")
+        return {"success": False, "message": "Failed to send OTP email"}, 502
 
 
 def login_required(f):
@@ -1286,6 +1542,8 @@ def find_remedy(key, readable_label):
     return DEFAULT_INFO
 
 def preprocess_image(img_bytes, target_size=(224,224)):
+    if Image is None or np is None:
+        raise RuntimeError('Image preprocessing unavailable: install Pillow and numpy')
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     img = img.resize(target_size)
     arr = np.array(img, dtype=np.float32) / 255.0
@@ -1298,8 +1556,18 @@ def preprocess_image(img_bytes, target_size=(224,224)):
 @app.route("/predict", methods=["POST"])
 def predict():
 
+    # Allow the server to run without heavy ML dependencies (useful for free deployments).
+    if tf is None or np is None or Image is None:
+        return jsonify({
+            "error": "Prediction features are disabled on this server",
+            "hint": "Install tensorflow, numpy, and Pillow to enable /predict"
+        }), 503
+
     # Load model only when first request comes
-    model = load_model_lazy()  #  ⬅ IMPORTANT
+    try:
+        model = load_model_lazy()  #  ⬅ IMPORTANT
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
 
     if "image" not in request.files:
         return jsonify({"error": "Missing image"}), 400
@@ -1534,6 +1802,132 @@ def update_prices_for_commodity(commodity, force=False):
     save_cache(cache)
     return cache
 
+
+# -----------------------------------------------------
+#   OPTIONAL: GEMINI/GEMMA AI SUMMARY FOR LIVE PRICE
+# -----------------------------------------------------
+def _gemini_config():
+    api_key = (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
+    model = (os.environ.get('GEMINI_MODEL') or 'gemma-3-4b-it').strip()
+    api_base = (os.environ.get('GEMINI_API_BASE') or 'https://generativelanguage.googleapis.com').strip()
+    return {
+        'api_key': api_key,
+        'model': model,
+        'api_base': api_base,
+    }
+
+
+def _extract_json_from_text(text: str):
+    if not text:
+        return None
+    text = text.strip()
+    # direct JSON
+    try:
+        if text.startswith('{') and text.endswith('}'):
+            return json.loads(text)
+    except Exception:
+        pass
+
+    # fenced block
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            return None
+
+    # best-effort: first {...} block
+    m2 = re.search(r"(\{.*\})", text, flags=re.DOTALL)
+    if m2:
+        try:
+            return json.loads(m2.group(1))
+        except Exception:
+            return None
+    return None
+
+
+def gemini_live_price_summary(commodity: str, items: list, state: str = None, district: str = None, market: str = None):
+    """Use Gemini/Gemma to summarize live price rows into a single recommended price.
+
+    Note: The model cannot fetch live data itself; we pass it the scraped rows.
+    """
+    cfg = _gemini_config()
+    if not cfg['api_key']:
+        return {
+            'enabled': False,
+            'reason': 'GEMINI_API_KEY (or GOOGLE_API_KEY) not configured'
+        }
+
+    # Keep prompt bounded
+    items_in = items[:25] if isinstance(items, list) else []
+    focus_bits = []
+    if state:
+        focus_bits.append(f"state={state}")
+    if district:
+        focus_bits.append(f"district={district}")
+    if market:
+        focus_bits.append(f"market={market}")
+    focus = (', '.join(focus_bits)) if focus_bits else 'none'
+
+    prompt = (
+        "You are an agriculture market analyst. "
+        "Given live mandi price rows for a commodity, pick ONE recommended modal price to show the user. "
+        "Use INR and unit '100kg'. Prefer recent rows and ignore clearly invalid or missing prices. "
+        "If a focus location is provided, prioritize rows matching it (case-insensitive substring match). "
+        "Return ONLY valid JSON with these keys: "
+        "recommended_modal_price, currency, unit, price_min, price_max, markets_count, as_of, rationale.\n"
+        f"Commodity: {commodity}\n"
+        f"Focus location: {focus}\n"
+        f"Rows (JSON array): {json.dumps(items_in, ensure_ascii=False)}"
+    )
+
+    url = f"{cfg['api_base'].rstrip('/')}/v1beta/models/{cfg['model']}:generateContent"
+    try:
+        r = requests.post(
+            url,
+            params={'key': cfg['api_key']},
+            json={
+                'contents': [
+                    {'role': 'user', 'parts': [{'text': prompt}]}
+                ],
+                'generationConfig': {
+                    'temperature': 0.2,
+                    'maxOutputTokens': 512
+                }
+            },
+            timeout=20
+        )
+        if r.status_code != 200:
+            return {
+                'enabled': False,
+                'reason': f"Gemini API error {r.status_code}",
+                'details': (r.text[:500] if r.text else '')
+            }
+
+        data = r.json() if r.content else {}
+        text = ''
+        try:
+            # candidates[0].content.parts[0].text
+            cand0 = (data.get('candidates') or [])[0] if (data.get('candidates') or []) else {}
+            parts = (((cand0.get('content') or {}).get('parts')) or [])
+            if parts and isinstance(parts[0], dict):
+                text = parts[0].get('text') or ''
+        except Exception:
+            text = ''
+
+        parsed = _extract_json_from_text(text)
+        return {
+            'enabled': True,
+            'model': cfg['model'],
+            'raw_text': text,
+            'parsed': parsed
+        }
+    except Exception as e:
+        return {
+            'enabled': False,
+            'reason': f"Gemini request failed: {str(e)}"
+        }
+
 # -----------------------------------------------------
 #   Scheduler: daily refresh
 # -----------------------------------------------------
@@ -1564,6 +1958,12 @@ def price():
     commodity = request.args.get("commodity")
     if not commodity:
         return jsonify({"success": False, "msg": "Commodity required"}), 400
+
+    ai_requested = str(request.args.get('ai') or '').lower() in ('1', 'true', 'yes')
+    focus_state = request.args.get('state')
+    focus_district = request.args.get('district')
+    focus_market = request.args.get('market')
+
     key = norm(commodity)
     cache = load_cache()
     data = cache.get("commodities", {}).get(key, {})
@@ -1577,7 +1977,16 @@ def price():
         except Exception as e:
             return jsonify({"success": False, "msg": f"Fetch failed: {str(e)}"}), 500
 
-    return jsonify({"success": True, "data": items})
+    resp = {"success": True, "data": items}
+    if ai_requested:
+        resp['ai'] = gemini_live_price_summary(
+            commodity=commodity,
+            items=items,
+            state=focus_state,
+            district=focus_district,
+            market=focus_market
+        )
+    return jsonify(resp)
 
 # Admin refresh endpoint
 ADMIN_USER = "admin"
@@ -2329,15 +2738,26 @@ def _guard_static_home_access():
 #   RUN SERVER
 # -----------------------------------------------------
 if __name__ == "__main__":
-    # Prime cache with common commodities (best-effort)
-    try:
-        for c in ["tomato", "banana", "onion", "potato"]:
+    # Optional: Prime cache with common commodities.
+    # Disabled by default to keep startup fast on hosted platforms.
+    if str(os.environ.get('SEED_PRICES_ON_START', '0')).lower() in ('1', 'true', 'yes'):
+        def _seed_prices_bg():
             try:
-                update_prices_for_commodity(c)
-                time.sleep(1)
+                for c in ["tomato", "banana", "onion", "potato"]:
+                    try:
+                        update_prices_for_commodity(c)
+                        time.sleep(1)
+                    except Exception as e:
+                        print("Initial fetch error for", c, ":", e)
             except Exception as e:
-                print("Initial fetch error for", c, ":", e)
-    except Exception as e:
-        print("Initial seeding error:", e)
+                print("Initial seeding error:", e)
 
-    app.run(debug=True, host="0.0.0.0", port=5000)
+        threading.Thread(target=_seed_prices_bg, daemon=True).start()
+
+    # Render/hosted platforms provide PORT; default to 5000 for local.
+    try:
+        port = int(os.environ.get('PORT', '5000'))
+    except Exception:
+        port = 5000
+    debug = str(os.environ.get('FLASK_DEBUG', '0')).lower() in ('1', 'true', 'yes')
+    app.run(debug=debug, host="0.0.0.0", port=port)

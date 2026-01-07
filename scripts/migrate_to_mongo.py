@@ -10,6 +10,7 @@ This will import:
  - data/orders.json -> orders collection
  - data/products.json -> products collection
  - data/prices.json -> prices collection
+ - data/today_deals.json -> today_deals collection
 
 Be careful: this script will replace existing collections with the imported data.
 """
@@ -48,6 +49,7 @@ mappings = [
     ('orders.json', 'orders'),
     ('products.json', 'products'),
     ('prices.json', 'prices'),
+    ('today_deals.json', 'today_deals'),
 ]
 
 for fname, collname in mappings:
@@ -73,6 +75,17 @@ for fname, collname in mappings:
     elif isinstance(data, dict) and 'commodities' in data and collname == 'prices':
         # store cache object as single document
         coll.insert_one({'cache': data})
+        print(f"Imported {fname} into collection {collname} (1 document)")
+        continue
+    elif isinstance(data, list) and collname == 'today_deals':
+        # store deals list as a single document
+        ids = []
+        for x in data:
+            try:
+                ids.append(int(x))
+            except Exception:
+                pass
+        coll.insert_one({'_id': 'today_deals', 'ids': ids})
         print(f"Imported {fname} into collection {collname} (1 document)")
         continue
     else:

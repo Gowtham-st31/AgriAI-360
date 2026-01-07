@@ -2,6 +2,16 @@
 
 This project can send OTP emails via SMTP. Follow these steps to enable real delivery.
 
+## Recommended for deployment (Render): SendGrid Email API
+
+Hosted platforms can have SMTP restrictions or slow SMTP delivery. This app supports SendGrid via HTTPS.
+
+Set environment variables:
+
+- `SENDGRID_API_KEY` = your SendGrid API key
+- `SENDGRID_FROM` = a verified sender (Single Sender Verification or domain-auth)
+- `EMAIL_PROVIDER=sendgrid` (forces SendGrid; no SMTP fallback)
+
 1) Recommended: use Gmail + App Password
 
 - Ensure 2-Step Verification is enabled on the Google account.
