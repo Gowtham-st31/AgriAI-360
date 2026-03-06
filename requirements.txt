@@ -19,4 +19,6 @@ numpy
 Pillow
 
 # TensorFlow is only needed if you want to run the bundled model locally.
-tensorflow==2.16.1
+# Render currently defaults to Python 3.13, and tensorflow==2.16.1 has no wheels for 3.13.
+# On Python 3.13+ the app will run without local ML and will use Gemini for /predict.
+tensorflow==2.16.1; python_version < "3.13"
