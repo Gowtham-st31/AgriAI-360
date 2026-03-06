@@ -1,33 +1,20 @@
-# SMTP / OTP Setup
+# OTP Email (Gmail SMTP)
 
-This project can send OTP emails via SMTP. Follow these steps to enable real delivery.
+This project sends OTP emails using Gmail SMTP with an App Password (works on Render free plan).
 
-## Recommended for deployment (Render): SendGrid Email API
-
-Hosted platforms can have SMTP restrictions or slow SMTP delivery. This app supports SendGrid via HTTPS.
-
-Set environment variables:
-
-- `SENDGRID_API_KEY` = your SendGrid API key
-- `SENDGRID_FROM` = a verified sender (Single Sender Verification or domain-auth)
-- `EMAIL_PROVIDER=sendgrid` (forces SendGrid; no SMTP fallback)
-
-1) Recommended: use Gmail + App Password
+1) Enable Gmail App Password
 
 - Ensure 2-Step Verification is enabled on the Google account.
 - Create an App Password (Google Account -> Security -> 2-Step Verification -> App passwords).
-- Copy the 16-character app password — this will be used as `SMTP_PASS`.
+- Copy the 16-character app password — this will be used as `EMAIL_PASS`.
 
 2) Provide environment variables
 
 Option A — temporary in PowerShell (session only):
 ```
 cd C:\Users\gowth\agriAI360
-#$env:SMTP_USER = "yourgmail@gmail.com"
-#$env:SMTP_PASS = "your_app_password_here"
-#$env:SMTP_HOST = "smtp.gmail.com"
-#$env:SMTP_PORT = "465"
-#$env:SMTP_USE_SSL = "1"
+#$env:EMAIL_USER = "yourgmail@gmail.com"
+#$env:EMAIL_PASS = "your_app_password_here"
 python .\app.py
 ```
 
@@ -43,24 +30,6 @@ pip install -r requirements.txt
 python .\app.py
 ```
 
-3) Test using a local debug SMTP server (no external email required)
-
-In a terminal run:
-```
-python -m smtpd -n -c DebuggingServer localhost:1025
-```
-Then run the app with these env vars set (PowerShell):
-```
-$env:SMTP_HOST = "localhost"
-$env:SMTP_PORT = "1025"
-$env:SMTP_USE_SSL = "0"
-python .\app.py
-```
-The debug SMTP server will print the outgoing message including the OTP.
-
-4) Troubleshooting
-- If you see `535` or `SMTPAuthenticationError`: check `SMTP_USER` and `SMTP_PASS`. For Gmail use an App Password.
-- Check the server console for either the dev-mode OTP print (`[DEV MODE] SMTP not configured. OTP for ...`) or the SMTP traceback.
+3) Troubleshooting
+- If you see `535` / `SMTPAuthenticationError`: verify `EMAIL_USER` and `EMAIL_PASS` (must be an App Password, not your normal Gmail password).
 - Check recipient spam folder.
-
-If you want, I can also add a small PowerShell script to start the app with env vars pre-filled (not with your secrets). Let me know.

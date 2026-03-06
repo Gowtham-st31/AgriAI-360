@@ -38,37 +38,116 @@
       <p><strong data-i18n="detect.daily">Daily Care Tips:</strong></p>
       <ul id="r_daily"></ul>
     </div>
+
+    <!-- Gemini Agent Chat Box -->
+    <div id="aiAgentBox" style="display:none;margin-top:20px;padding:16px;background:linear-gradient(135deg,#e8fff0 0%,#d4f5e0 100%);border-radius:12px;border:1px solid #2f8f46">
+      <h3 style="margin:0 0 12px 0;color:#12733a;display:flex;align-items:center;gap:8px">
+        <span style="font-size:1.3em">🤖</span>
+        <span data-i18n="detect.aiAgent">Ask AI Assistant</span>
+      </h3>
+      <p style="color:#555;font-size:0.9em;margin-bottom:12px" data-i18n="detect.aiAgentDesc">Have questions about this disease? Ask our AI assistant for more details, treatment tips, or prevention advice.</p>
+      <div style="display:flex;gap:10px;align-items:stretch">
+        <input type="text" id="aiQuestion" placeholder="e.g., How often should I apply the treatment?" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid #ccc;font-size:15px" data-i18n="detect.aiPlaceholder">
+        <button id="aiAskBtn" class="btn" onclick="askAiAgent()" style="white-space:nowrap" data-i18n="detect.aiAsk">Ask AI</button>
+      </div>
+      <div id="aiAnswer" style="display:none;margin-top:14px;padding:12px;background:#fff;border-radius:8px;border-left:4px solid #12733a">
+        <p style="margin:0;color:#333;line-height:1.6" id="aiAnswerText"></p>
+      </div>
+      <div id="aiLoading" style="display:none;margin-top:12px;color:#666">
+        <span>⏳</span> <span data-i18n="detect.aiLoading">Thinking...</span>
+      </div>
+      <div id="aiError" style="display:none;margin-top:12px;padding:10px;background:#fff3cd;border-radius:6px;color:#856404"></div>
+    </div>
   </div>
 </div>
 
 <script>
+// Store current disease context for AI follow-up questions
+let currentDiseaseContext = null;
+
 const fileInput = document.getElementById('fileInput');
 const preview = document.getElementById('preview');
 fileInput.onchange = ()=>{ const f=fileInput.files[0]; if(!f) return; preview.src=URL.createObjectURL(f); preview.style.display='block' };
 
 async function detectDisease(){
   if(!fileInput.files.length){ alert('Please upload an image first.'); return }
-  const fd = new FormData(); fd.append('image', fileInput.files[0]);
-  let res;
-  try{ res = await fetch('/predict',{ method:'POST', body: fd }); }
-  catch(e){ showError('Could not connect to server'); return }
+  const fileObj = fileInput.files[0];
+  const lang = (function(){ try{ return localStorage.getItem('agri_lang') || 'en'; }catch(e){ return 'en'; } })();
+  // Only show results after verification.
+  try{ showStatus('Checking...'); }catch(e){}
 
-  if(!res.ok){ const err = await res.json().catch(()=>null); showError((err && (err.error||err.message))||'Model not available or prediction failed.'); return }
-  const data = await res.json();
-  showResult(data);
+  // 1) Local prediction
+  let localData = null;
+  try{
+    const fd = new FormData(); fd.append('image', fileObj);
+    const res = await fetch('/predict',{ method:'POST', body: fd });
+    if(!res.ok){
+      const err = await res.json().catch(()=>null);
+      const bits = [];
+      if(err){
+        if(err.error) bits.push(err.error);
+        else if(err.message) bits.push(err.message);
+        if(err.details) bits.push(err.details);
+        if(err.hint) bits.push(err.hint);
+      }
+      showError(bits.join(' | ') || 'Model not available or prediction failed.');
+      return;
+    }
+    localData = await res.json();
+  }catch(e){
+    showError('Could not connect to server');
+    return;
+  }
+
+  // 2) Verify with Gemini (if API key configured server-side)
+  let finalData = localData;
+  try{
+    const fd2 = new FormData(); fd2.append('image', fileObj);
+    const aiRes = await fetch('/predict?ai=1&lang=' + encodeURIComponent(lang), {
+      method:'POST',
+      headers: { 'Accept-Language': lang },
+      body: fd2
+    });
+    if(aiRes.ok){
+      const aiData = await aiRes.json();
+      if(aiData && (aiData.provider || '').toString().toLowerCase() === 'gemini'){
+        // Prefer Gemini result whenever available (acts as verification step)
+        finalData = aiData;
+      }
+    }
+  }catch(e){
+    // ignore; fall back to local
+  }
+
+  showResult(finalData);
 }
 
 function showError(msg){
   const box = document.getElementById('result');
   box.style.display='block';
-  document.getElementById('r_disease').innerText='Detection Failed';
+  const t = (k, fb)=>{ try{ return (window.__t && window.__t(k)) || fb; }catch(e){ return fb; } };
+  document.getElementById('r_disease').innerText = t('detect.errorTitle','Detection Failed');
   document.getElementById('r_desc').innerText = msg;
-  document.getElementById('r_remedies').innerHTML='<li>No remedies available.</li>';
-  document.getElementById('r_prevention').innerHTML='<li>No prevention steps available.</li>';
-  document.getElementById('r_daily').innerHTML='<li>No daily care tips available.</li>';
+  document.getElementById('r_remedies').innerHTML='<li>' + t('detect.noRemedies','No remedies found.') + '</li>';
+  document.getElementById('r_prevention').innerHTML='<li>' + t('detect.noPrevention','No prevention steps found.') + '</li>';
+  document.getElementById('r_daily').innerHTML='<li>' + t('detect.noDaily','No daily care tips available.') + '</li>';
+  // Hide AI agent box on error
+  const aiBox = document.getElementById('aiAgentBox');
+  if(aiBox) aiBox.style.display = 'none';
+  currentDiseaseContext = null;
 }
 
 function showResult(data){
+  const t = (k, fb)=>{ try{ return (window.__t && window.__t(k)) || fb; }catch(e){ return fb; } };
+  // Store context for AI follow-up questions
+  currentDiseaseContext = {
+    disease: data.disease || 'Unknown',
+    description: data.description || '',
+    remedies: data.remedies || [],
+    prevention: data.prevention || [],
+    daily_care: data.daily_care || []
+  };
+
   const box = document.getElementById('result');
   box.style.display='block';
   // Set disease name and description
@@ -97,61 +176,161 @@ function showResult(data){
 
   // Use humanized fallback initially; translations (data-i18n) may replace them afterwards
   rd.innerText = humanizeKey(diseaseName);
-  descEl.innerText = humanizeKey(data.description || 'No description available');
+  let desc = (data.description == null) ? '' : String(data.description);
+  const descTrim = desc.trim();
+  if(!descTrim || descTrim.toLowerCase() === 'no description available') desc = t('detect.noDescription','No description available');
+  descEl.innerText = humanizeKey(desc);
 
-  // Try to set data-i18n keys so translations will apply if available in i18n.js
-  try{
-    // the server sometimes returns already-normalized keys like 'disease.corn_maize_...'
-    const norm = diseaseName.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_');
-    if(norm) rd.setAttribute('data-i18n', 'disease.'+norm);
-    if(norm) descEl.setAttribute('data-i18n', 'disease.'+norm+'.description');
-  }catch(e){}
+  // Do not set data-i18n for dynamic disease content.
+  // This project doesn't ship translations for disease/remedy/prevention keys, and applying i18n
+  // would overwrite readable fallbacks with the raw key.
+  try{ rd.removeAttribute('data-i18n'); }catch(e){}
+  try{ descEl.removeAttribute('data-i18n'); }catch(e){}
 
   // Remedies list: create <li> elements and attach data-i18n keys where possible
   const rList = document.getElementById('r_remedies'); rList.innerHTML='';
-  if(data.remedies && data.remedies.length){
-    data.remedies.forEach((r, idx)=>{
+  const remedies = (data.remedies || []).filter(x => x != null && String(x).trim() !== '');
+  if(remedies.length){
+    remedies.forEach((r)=>{
       const li = document.createElement('li');
       // show a humanized fallback immediately; if a translation exists it will replace it
       try{ li.textContent = humanizeKey(r); }catch(e){ li.textContent = r }
-      try{ const rnorm = r.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_'); if(rnorm) li.setAttribute('data-i18n', 'remedy.'+rnorm); }catch(e){}
+      try{ li.removeAttribute('data-i18n'); }catch(e){}
       rList.appendChild(li);
     });
   } else if(data.description){
     const li = document.createElement('li'); li.textContent = data.description; rList.appendChild(li);
   } else {
-    const li = document.createElement('li'); li.textContent = 'No remedies found.'; rList.appendChild(li);
+    const li = document.createElement('li'); li.textContent = t('detect.noRemedies','No remedies found.'); rList.appendChild(li);
   }
 
   // Prevention list
   const pList = document.getElementById('r_prevention'); pList.innerHTML='';
-  if(data.prevention && data.prevention.length){
-    data.prevention.forEach(p=>{
+  const prevention = (data.prevention || []).filter(x => x != null && String(x).trim() !== '');
+  if(prevention.length){
+    prevention.forEach(p=>{
       const li = document.createElement('li');
       try{ li.textContent = humanizeKey(p); }catch(e){ li.textContent = p }
-      try{ const pnorm = p.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_'); if(pnorm) li.setAttribute('data-i18n', 'prevention.'+pnorm); }catch(e){}
+      try{ li.removeAttribute('data-i18n'); }catch(e){}
       pList.appendChild(li);
     });
   } else {
-    const li = document.createElement('li'); li.textContent = 'No prevention steps found.'; pList.appendChild(li);
+    const li = document.createElement('li'); li.textContent = t('detect.noPrevention','No prevention steps found.'); pList.appendChild(li);
   }
 
   // Daily care
   const dList = document.getElementById('r_daily'); dList.innerHTML='';
-  if(data.daily_care && data.daily_care.length){
-    data.daily_care.forEach(t=>{
+  const daily = (data.daily_care || []).filter(x => x != null && String(x).trim() !== '');
+  if(daily.length){
+    daily.forEach(t=>{
       const li = document.createElement('li');
       try{ li.textContent = humanizeKey(t); }catch(e){ li.textContent = t }
-      try{ const dnorm = t.toString().trim().toLowerCase().replace(/[^a-z0-9]+/g,'_'); if(dnorm) li.setAttribute('data-i18n', 'daily.'+dnorm); }catch(e){}
+      try{ li.removeAttribute('data-i18n'); }catch(e){}
       dList.appendChild(li);
     });
   } else {
-    const li = document.createElement('li'); li.textContent = 'No daily care tips available.'; dList.appendChild(li);
+    const li = document.createElement('li'); li.textContent = t('detect.noDaily','No daily care tips available.'); dList.appendChild(li);
   }
 
-  // Trigger translations if translations exist for these dynamic keys
-  try{ if(typeof ensureI18nLoaded === 'function') ensureI18nLoaded(function(){ try{ if(typeof applyTranslations === 'function') applyTranslations(); }catch(e){} }); }catch(e){}
+  // Do not force re-translation for dynamic content.
+
+  // Show AI Agent box after successful detection
+  const aiBox = document.getElementById('aiAgentBox');
+  if(aiBox) aiBox.style.display = 'block';
+  // Reset previous answers
+  const aiAnswer = document.getElementById('aiAnswer');
+  const aiError = document.getElementById('aiError');
+  if(aiAnswer) aiAnswer.style.display = 'none';
+  if(aiError) aiError.style.display = 'none';
+  document.getElementById('aiQuestion').value = '';
 }
+
+// AI Agent: Ask follow-up questions about detected disease
+async function askAiAgent(){
+  const questionInput = document.getElementById('aiQuestion');
+  const question = (questionInput.value || '').trim();
+  if(!question){
+    alert('Please enter a question.');
+    return;
+  }
+
+  if(!currentDiseaseContext){
+    alert('Please detect a disease first before asking questions.');
+    return;
+  }
+
+  const loadingEl = document.getElementById('aiLoading');
+  const answerEl = document.getElementById('aiAnswer');
+  const answerText = document.getElementById('aiAnswerText');
+  const errorEl = document.getElementById('aiError');
+  const askBtn = document.getElementById('aiAskBtn');
+
+  // Show loading state
+  loadingEl.style.display = 'block';
+  answerEl.style.display = 'none';
+  errorEl.style.display = 'none';
+  askBtn.disabled = true;
+
+  try{
+    const lang = (function(){ try{ return localStorage.getItem('agri_lang') || 'en'; }catch(e){ return 'en'; } })();
+    const res = await fetch('/disease/ask?lang=' + encodeURIComponent(lang), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept-Language': lang },
+      body: JSON.stringify({
+        question: question,
+        disease: currentDiseaseContext.disease,
+        context: {
+          description: currentDiseaseContext.description,
+          remedies: currentDiseaseContext.remedies,
+          prevention: currentDiseaseContext.prevention,
+          daily_care: currentDiseaseContext.daily_care
+        }
+      })
+    });
+
+    const data = await res.json();
+
+    if(!res.ok || data.error){
+      const bits = [];
+      if(data){
+        if(data.error) bits.push(data.error);
+        if(data.reason) bits.push(data.reason);
+        if(data.hint) bits.push(data.hint);
+        if(data.details){
+          const d = String(data.details);
+          bits.push(d.length > 400 ? (d.slice(0, 400) + '…') : d);
+        }
+      }
+      errorEl.textContent = bits.filter(Boolean).join(' | ') || 'Failed to get AI response';
+      errorEl.style.display = 'block';
+      return;
+    }
+
+    if(data.answer){
+      answerText.textContent = data.answer;
+      answerEl.style.display = 'block';
+    } else {
+      errorEl.textContent = 'No response from AI assistant.';
+      errorEl.style.display = 'block';
+    }
+  } catch(e){
+    errorEl.textContent = 'Could not connect to AI assistant: ' + e.message;
+    errorEl.style.display = 'block';
+  } finally {
+    loadingEl.style.display = 'none';
+    askBtn.disabled = false;
+  }
+}
+
+// Allow Enter key to submit question
+document.addEventListener('DOMContentLoaded', function(){
+  const qInput = document.getElementById('aiQuestion');
+  if(qInput){
+    qInput.addEventListener('keypress', function(e){
+      if(e.key === 'Enter'){ askAiAgent(); }
+    });
+  }
+});
 
 (async function(){ try{ const r = await fetch('/model/status'); const j = await r.json(); const b = document.getElementById('modelBanner'); if(b){ if(!j.loaded){ b.style.display='block'; b.innerText = 'Model not loaded: ' + (j.message||'using fallback'); } else { b.style.display='none' } } }catch(e){ const b=document.getElementById('modelBanner'); if(b){ b.style.display='block'; b.innerText='Could not check model status.' } } })();
 </script>

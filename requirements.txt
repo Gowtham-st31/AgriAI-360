@@ -14,7 +14,9 @@ dnspython>=2.0
 # Production WSGI server (recommended for deployment)
 gunicorn>=20.1
 
-# Optional ML deps (only needed for /predict)
-# numpy
-# Pillow
-# tensorflow
+# ML deps (needed for local /predict image preprocessing)
+numpy
+Pillow
+
+# TensorFlow is only needed if you want to run the bundled model locally.
+tensorflow==2.16.1

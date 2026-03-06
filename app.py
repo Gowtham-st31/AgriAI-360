@@ -2,6 +2,7 @@
 # app.py
 import re
 import os
+import sys
 import requests
 import io
 import json
@@ -11,6 +12,7 @@ from email.mime.text import MIMEText
 import time
 import ssl
 import threading
+import base64
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_from_directory, session, redirect, make_response, has_request_context
 from flask_cors import CORS
@@ -71,7 +73,26 @@ def load_model_lazy():
         if not os.path.exists(MODEL_PATH):
             download_from_drive()
         print("📦 Loading .keras model...")
-        model = tf.keras.models.load_model(MODEL_PATH)
+        try:
+            model = tf.keras.models.load_model(MODEL_PATH)
+        except Exception as e:
+            msg = str(e)
+            # This project currently ships a .keras archive that is Keras v3 formatted.
+            # If the runtime is TF 2.15 / Keras 2.x, deserialization commonly fails with
+            # errors mentioning batch_shape / DTypePolicy.
+            tf_ver = getattr(tf, '__version__', '') or ''
+            try:
+                import keras as _keras
+                keras_ver = getattr(_keras, '__version__', '') or ''
+            except Exception:
+                keras_ver = ''
+
+            if (('batch_shape' in msg) or ('DTypePolicy' in msg)) and (tf_ver.startswith('2.15') or keras_ver.startswith('2.')):
+                raise RuntimeError(
+                    'Disease model format requires TensorFlow/Keras v3. '
+                    'Upgrade to tensorflow>=2.16 and redeploy.'
+                ) from e
+            raise
         print("🚀 Model Loaded Successfully!")
     return model
 
@@ -80,7 +101,7 @@ def load_model_lazy():
 try:
     from dotenv import load_dotenv
     _dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
-    load_dotenv(dotenv_path=_dotenv_path, override=False)
+    load_dotenv(dotenv_path=_dotenv_path, override=True)
 except Exception:
     # If python-dotenv isn't installed, env vars must be set by the host.
     pass
@@ -118,6 +139,186 @@ CORS(app, supports_credentials=True)
 # Secret can be provided via FLASK_SECRET in the environment or .env; fallback preserved
 app.secret_key = os.environ.get("FLASK_SECRET", "my_admin_secret_key_123")
 USERS_FILE = "data/users.json"
+
+def _normalize_lang_code(lang: str) -> str:
+    s = (lang or '').strip()
+    if not s:
+        return 'en'
+    s = s.replace('_', '-').lower()
+    # Handle Accept-Language like: "ta-IN,ta;q=0.9,en;q=0.8"
+    s = s.split(',')[0].split(';')[0].strip()
+    s = s.split('-')[0].strip()
+    if s in ('en', 'hi', 'ta', 'kn', 'ml'):
+        return s
+    return 'en'
+
+
+def _requested_lang_code() -> str:
+    return _normalize_lang_code(
+        request.args.get('lang')
+        or request.headers.get('Accept-Language')
+        or ''
+    )
+
+
+def _localized_fallback_texts(lang_code: str) -> dict:
+    lc = _normalize_lang_code(lang_code)
+    # Keep these short; they are only used when we truly can't provide content.
+    table = {
+        'en': {
+            'no_desc': 'No description available',
+            'no_remedies': 'No remedies found.',
+            'no_prevention': 'No prevention steps found.',
+            'no_daily': 'No daily care tips available.',
+        },
+        'hi': {
+            'no_desc': 'विवरण उपलब्ध नहीं है',
+            'no_remedies': 'कोई उपचार उपलब्ध नहीं।',
+            'no_prevention': 'कोई रोकथाम कदम उपलब्ध नहीं।',
+            'no_daily': 'दैनिक देखभाल सुझाव उपलब्ध नहीं।',
+        },
+        'ta': {
+            'no_desc': 'விளக்கம் கிடைக்கவில்லை',
+            'no_remedies': 'சிகிச்சைகள் கிடைக்கவில்லை.',
+            'no_prevention': 'காக்க நடவடிக்கைகள் கிடைக்கவில்லை.',
+            'no_daily': 'தினசரி பராமரிப்பு குறிப்புகள் கிடைக்கவில்லை.',
+        },
+        'kn': {
+            'no_desc': 'ವಿವರಣೆ ಲಭ್ಯವಿಲ್ಲ',
+            'no_remedies': 'ಯಾವುದೇ ಚಿಕಿತ್ಸೆ ಲಭ್ಯವಿಲ್ಲ.',
+            'no_prevention': 'ತಡೆ ಕ್ರಮಗಳು ಲಭ್ಯವಿಲ್ಲ.',
+            'no_daily': 'ದೈನಂದಿನ ಆರೈಕೆ ಸಲಹೆಗಳು ಲಭ್ಯವಿಲ್ಲ.',
+        },
+        'ml': {
+            'no_desc': 'വിവരണം ലഭ്യമല്ല',
+            'no_remedies': 'ചികിത്സകൾ ലഭ്യമല്ല.',
+            'no_prevention': 'പ്രതിരോധ നടപടികൾ ലഭ്യമല്ല.',
+            'no_daily': 'ദൈനംദിന പരിപാലന നിർദ്ദേശങ്ങൾ ലഭ്യമല്ല.',
+        },
+    }
+    return table.get(lc, table['en'])
+
+
+def _is_placeholder_text(s: str) -> bool:
+    if s is None:
+        return True
+    v = str(s).strip().lower()
+    if not v:
+        return True
+    # Common placeholders (English) sometimes returned by the model or UI.
+    placeholders = {
+        'no description available',
+        'no remedies found.',
+        'no prevention steps found.',
+        'no daily care tips available.',
+    }
+    return v in placeholders
+
+
+def _gemini_fill_text_only_disease_info(
+    disease: str,
+    lang_code: str,
+    existing: dict | None = None,
+):
+    """Ask Gemini (text-only) to fill missing disease info.
+
+    Used as a fallback when the image response is incomplete or when
+    the disease label is too generic for our built-in mapping.
+    """
+    cfg = _gemini_config()
+    if not cfg.get('api_key'):
+        return None
+
+    disease_name = (disease or '').strip()
+    if not disease_name:
+        return None
+
+    lc = _normalize_lang_code(lang_code)
+    lang_names = {
+        'en': 'English',
+        'hi': 'Hindi',
+        'ta': 'Tamil',
+        'kn': 'Kannada',
+        'ml': 'Malayalam',
+    }
+    target_lang = lang_names.get(lc, 'English')
+
+    existing = existing or {}
+    existing_json = {
+        'disease': disease_name,
+        'description': (existing.get('description') or ''),
+        'remedies': existing.get('remedies') if isinstance(existing.get('remedies'), list) else [],
+        'prevention': existing.get('prevention') if isinstance(existing.get('prevention'), list) else [],
+        'daily_care': existing.get('daily_care') if isinstance(existing.get('daily_care'), list) else [],
+    }
+
+    prompt = (
+        "You are an expert agricultural assistant. "
+        f"Answer in {target_lang}. "
+        "Return ONLY valid JSON with keys: description, remedies, prevention, daily_care. "
+        "description must be a short sentence (not empty). "
+        "remedies/prevention/daily_care must be arrays of short strings (1-5 items each). "
+        "Do NOT return translation keys. "
+        f"Disease: {disease_name}. "
+        "If the disease name is generic, provide best-practice guidance for that disease. "
+        "Here is any existing info (may be incomplete): "
+        + json.dumps(existing_json, ensure_ascii=False)
+    )
+
+    payload_v1 = {
+        'contents': [
+            {
+                'role': 'user',
+                'parts': [{'text': prompt}]
+            }
+        ],
+        'generationConfig': {
+            'temperature': 0.2,
+            'maxOutputTokens': 512
+        }
+    }
+    payload_v2 = {
+        'contents': [
+            {
+                'role': 'user',
+                'parts': [{'text': prompt}]
+            }
+        ],
+        'generation_config': {
+            'temperature': 0.2,
+            'max_output_tokens': 512
+        }
+    }
+
+    try:
+        model_name = _gemini_disease_model_name()
+        fallbacks = _gemini_disease_model_fallbacks()
+        r, used_url, tried_urls = _gemini_generate_content_request(
+            api_base=cfg['api_base'],
+            api_key=cfg['api_key'],
+            model=model_name,
+            fallback_models=fallbacks,
+            payload_primary=payload_v1,
+            payload_secondary=payload_v2,
+            timeout=20,
+        )
+        if isinstance(r, Exception) or (getattr(r, 'status_code', 0) != 200):
+            return None
+
+        data = r.json() if r.content else {}
+        text = ''
+        try:
+            cand0 = (data.get('candidates') or [])[0] if (data.get('candidates') or []) else {}
+            parts = (((cand0.get('content') or {}).get('parts')) or [])
+            if parts and isinstance(parts[0], dict):
+                text = parts[0].get('text') or ''
+        except Exception:
+            text = ''
+
+        parsed = _extract_json_from_text(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
 
 # ------------------
 # MongoDB (Atlas) init
@@ -401,6 +602,24 @@ DISEASE_REMEDIES = {
         "prevention": ["Avoid overhead watering; use tolerant varieties if available."],
         "daily_care": ["Monitor plants daily in wet conditions."]
     },
+    "fireblight": {
+        "description": "Bacterial disease causing blackened, wilted shoots and blossoms that can look scorched (common in apple/pear).",
+        "remedies": [
+            "Prune infected shoots/branches 20–30 cm below visible damage and disinfect tools between cuts.",
+            "Remove and destroy pruned infected material (do not compost if spread is a risk).",
+            "Use recommended copper sprays during dormancy and follow local guidance for antibiotics where permitted."
+        ],
+        "prevention": [
+            "Avoid excessive nitrogen fertilization that promotes tender growth.",
+            "Prune to improve airflow; avoid pruning during wet conditions.",
+            "Choose resistant varieties when available and monitor during bloom."
+        ],
+        "daily_care": [
+            "Monitor new shoots and blossoms frequently during warm, humid periods.",
+            "Remove any new infected tips early to reduce spread.",
+            "Keep trees healthy with balanced watering and nutrition."
+        ]
+    },
     "tomatoleafmold": {
         "description": "Leaf mold: fuzzy/gray mold beneath leaves causing yellowing above.",
         "remedies": ["Improve ventilation; apply fungicides if necessary."],
@@ -456,15 +675,7 @@ DEFAULT_INFO = {
 # -----------------------------------------------------
 #   MODEL LOADING
 # -----------------------------------------------------
-MODEL_PATH = "model.keras"
-model = None
-if tf is not None:
-    try:
-        model = tf.keras.models.load_model(MODEL_PATH)
-        print("Model loaded from", MODEL_PATH)
-    except Exception as e:
-        print("Warning: failed to load model:", e)
-        model = None
+# Model is loaded on-demand via load_model_lazy().
 
 # -----------------------------------------------------
 #   helper utilities
@@ -748,187 +959,59 @@ def update_order_by_id(order_id, updates: dict):
 
 import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
 
-def _smtp_config():
-    """Read SMTP settings from environment.
 
-    Supported:
-      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
-      SMTP_FROM, SMTP_USE_SSL, SMTP_USE_STARTTLS,
-      SMTP_TIMEOUT, SMTP_RETRIES
+def _email_is_configured() -> bool:
+    sender_email = (os.getenv("EMAIL_USER") or "").strip()
+    app_password = (os.getenv("EMAIL_PASS") or "").strip().replace(" ", "")
+    return bool(sender_email and app_password)
+
+
+def send_otp(receiver_email, otp):
+    """Send OTP via Gmail SMTP (TLS 587) using an App Password.
+
+    Env vars:
+      EMAIL_USER: Gmail address
+      EMAIL_PASS: Gmail App Password
     """
-    host = (os.environ.get('SMTP_HOST') or '').strip()
-    port_raw = (os.environ.get('SMTP_PORT') or '').strip()
-    user = (os.environ.get('SMTP_USER') or '').strip()
-    password = (os.environ.get('SMTP_PASS') or '').strip()
-    from_addr = (os.environ.get('SMTP_FROM') or user).strip()
+    sender_email = (os.getenv("EMAIL_USER") or "").strip()
+    app_password = (os.getenv("EMAIL_PASS") or "").strip().replace(" ", "")
+    if not sender_email or not app_password:
+        raise RuntimeError("Email not configured: set EMAIL_USER and EMAIL_PASS")
 
-    # Defaults
-    port = 465
-    if port_raw:
+    msg = MIMEText(f"Your OTP is {otp}")
+    msg["Subject"] = "OTP Verification"
+    msg["From"] = sender_email
+    msg["To"] = receiver_email
+
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    try:
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(sender_email, app_password)
+        server.sendmail(sender_email, receiver_email, msg.as_string())
+    finally:
         try:
-            port = int(port_raw)
+            server.quit()
         except Exception:
-            port = 465
+            pass
 
-    use_ssl = str(os.environ.get('SMTP_USE_SSL') or '0').lower() in ('1', 'true', 'yes')
-    use_starttls = str(os.environ.get('SMTP_USE_STARTTLS') or '').lower() in ('1', 'true', 'yes')
-    if os.environ.get('SMTP_USE_STARTTLS') is None:
-        # If not explicitly set: default to STARTTLS when not using SSL.
-        use_starttls = not use_ssl
-
-    try:
-        timeout = float(os.environ.get('SMTP_TIMEOUT') or '10')
-    except Exception:
-        timeout = 10.0
-
-    try:
-        retries = int(os.environ.get('SMTP_RETRIES') or '2')
-    except Exception:
-        retries = 2
-
-    return {
-        'host': host,
-        'port': port,
-        'user': user,
-        'pass': password,
-        'from': from_addr,
-        'use_ssl': use_ssl,
-        'use_starttls': use_starttls,
-        'timeout': timeout,
-        'retries': max(1, retries),
-    }
-
-
-def _smtp_is_configured():
-    cfg = _smtp_config()
-    return bool(cfg['host'] and cfg['user'] and cfg['pass'] and cfg['from'])
-
-
-def _sendgrid_config():
-    api_key = (os.environ.get('SENDGRID_API_KEY') or '').strip()
-    from_addr = (os.environ.get('SENDGRID_FROM') or '').strip()
-    return {
-        'api_key': api_key,
-        'from': from_addr,
-        'timeout': 10,
-    }
-
-
-def _sendgrid_is_configured():
-    cfg = _sendgrid_config()
-    return bool(cfg['api_key'] and cfg['from'])
-
-
-def _send_via_sendgrid(to_email: str, subject: str, body_text: str):
-    cfg = _sendgrid_config()
-    if not (cfg['api_key'] and cfg['from']):
-        raise RuntimeError('SendGrid not configured: set SENDGRID_API_KEY and SENDGRID_FROM')
-
-    url = 'https://api.sendgrid.com/v3/mail/send'
-    payload = {
-        'personalizations': [{'to': [{'email': to_email}]}],
-        'from': {'email': cfg['from']},
-        'subject': subject,
-        'content': [{'type': 'text/plain', 'value': body_text}],
-    }
-
-    r = requests.post(
-        url,
-        headers={
-            'Authorization': f"Bearer {cfg['api_key']}",
-            'Content-Type': 'application/json'
-        },
-        json=payload,
-        timeout=cfg['timeout']
-    )
-
-    # SendGrid returns 202 Accepted on success
-    if r.status_code not in (200, 202):
-        raise RuntimeError(f"SendGrid error {r.status_code}: {(r.text[:500] if r.text else '')}")
     return True
 
 
-def _email_provider():
-        """Email provider selection.
-
-        EMAIL_PROVIDER:
-            - auto (default): prefer SendGrid if configured else SMTP
-            - sendgrid: force SendGrid only
-            - smtp: force SMTP only
-        """
-        return (os.environ.get('EMAIL_PROVIDER') or 'auto').strip().lower()
-
-
 def send_otp_email(email, otp):
-    subject = "Your OTP Verification - AgriAI360"
-    body = f"Your OTP is: {otp}\nValid for 2 minutes."
-
-    provider = _email_provider()
-
-    # Prefer HTTPS email API when configured (more reliable on hosted platforms)
-    if provider == 'sendgrid':
-        if not _sendgrid_is_configured():
-            raise RuntimeError('EMAIL_PROVIDER=sendgrid but SendGrid is not configured (set SENDGRID_API_KEY and SENDGRID_FROM)')
-        return _send_via_sendgrid(email, subject, body)
-
-    if provider == 'smtp':
-        # continue below (SMTP only)
-        pass
-    else:
-        # auto mode
-        if _sendgrid_is_configured():
-            return _send_via_sendgrid(email, subject, body)
-
-    cfg = _smtp_config()
-    if not (cfg['host'] and cfg['user'] and cfg['pass'] and cfg['from']):
-        if provider == 'smtp':
-            raise RuntimeError('EMAIL_PROVIDER=smtp but SMTP is not configured (set SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM)')
-        raise RuntimeError('Email not configured: set SENDGRID_API_KEY+SENDGRID_FROM or SMTP_* vars')
-
-    msg = MIMEMultipart()
-    msg['From'] = cfg['from']
-    msg['To'] = email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, "plain"))
-
-    last_err = None
-    context = ssl.create_default_context()
-    for attempt in range(cfg['retries']):
-        try:
-            if cfg['use_ssl']:
-                with smtplib.SMTP_SSL(cfg['host'], cfg['port'], timeout=cfg['timeout'], context=context) as server:
-                    server.login(cfg['user'], cfg['pass'])
-                    server.sendmail(cfg['from'], [email], msg.as_string())
-            else:
-                with smtplib.SMTP(cfg['host'], cfg['port'], timeout=cfg['timeout']) as server:
-                    server.ehlo()
-                    if cfg['use_starttls']:
-                        server.starttls(context=context)
-                        server.ehlo()
-                    server.login(cfg['user'], cfg['pass'])
-                    server.sendmail(cfg['from'], [email], msg.as_string())
-            return True
-        except Exception as e:
-            last_err = e
-            # small backoff to reduce transient failures
-            try:
-                time.sleep(0.4 * (attempt + 1))
-            except Exception:
-                pass
-            continue
-
-    raise RuntimeError(f"SMTP send failed: {str(last_err)}")
+    # Backward-compatible wrapper used by existing OTP routes.
+    return send_otp(email, otp)
 
 
 def send_otp_email_async(email, otp):
     """Send OTP in a background thread so HTTP responds quickly."""
 
     # Fail fast if nothing is configured.
-    if not (_sendgrid_is_configured() or _smtp_is_configured()):
-        raise RuntimeError('Email not configured: set SENDGRID_API_KEY+SENDGRID_FROM or SMTP_* vars')
+    if not _email_is_configured():
+        raise RuntimeError('Email not configured: set EMAIL_USER and EMAIL_PASS')
 
     def _runner():
         try:
@@ -962,11 +1045,11 @@ def request_otp():
         if not email:
             return jsonify({"success": False, "message": "Email required"}), 400
 
-        if not (_sendgrid_is_configured() or _smtp_is_configured()):
+        if not _email_is_configured():
             return jsonify({
                 "success": False,
                 "message": "Email not configured on server",
-                "hint": "Set SENDGRID_API_KEY+SENDGRID_FROM (recommended) or SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS/SMTP_FROM"
+                "hint": "Set EMAIL_USER (Gmail) and EMAIL_PASS (Gmail App Password)"
             }), 500
 
         otp = str(random.randint(100000, 999999))
@@ -985,7 +1068,7 @@ def request_otp():
             return jsonify({
                 "success": False,
                 "message": "Failed to send OTP email",
-                "hint": "Check SMTP/SendGrid env vars, verified sender, and spam folder. See server logs for details."
+                "hint": "Check EMAIL_USER/EMAIL_PASS, Gmail App Password, and recipient spam folder. See server logs for details."
             }), 502
 
     except Exception as e:
@@ -1096,7 +1179,7 @@ def register():
     session["register_email"] = email
     session["register_password_hash"] = p_hash
 
-    if not (_sendgrid_is_configured() or _smtp_is_configured()):
+    if not _email_is_configured():
         return {"success": False, "message": "Email not configured on server"}, 500
 
     otp = str(random.randint(100000, 999999))
@@ -1128,7 +1211,7 @@ def login_password():
         return {"success": False, "message": "Invalid credentials"}, 401
 
     # Password OK — start OTP 2FA
-    if not (_sendgrid_is_configured() or _smtp_is_configured()):
+    if not _email_is_configured():
         return {"success": False, "message": "Email not configured on server"}, 500
 
     otp = str(random.randint(100000, 999999))
@@ -1555,25 +1638,151 @@ def preprocess_image(img_bytes, target_size=(224,224)):
 # -----------------------------------------------------
 @app.route("/predict", methods=["POST"])
 def predict():
+    if "image" not in request.files:
+        return jsonify({"error": "Missing image"}), 400
 
-    # Allow the server to run without heavy ML dependencies (useful for free deployments).
-    if tf is None or np is None or Image is None:
-        return jsonify({
-            "error": "Prediction features are disabled on this server",
-            "hint": "Install tensorflow, numpy, and Pillow to enable /predict"
-        }), 503
+    # If ai=1 is requested (or if local ML is unavailable), use Gemini API.
+    ai_flag = str(request.args.get('ai') or '').strip().lower() in ('1', 'true', 'yes')
+    local_ml_available = not (tf is None or np is None or Image is None)
 
-    # Load model only when first request comes
+    img_file = request.files.get('image')
+    img_bytes = b''
+    try:
+        img_bytes = img_file.read() if img_file is not None else b''
+    except Exception:
+        img_bytes = b''
+    mime_type = (getattr(img_file, 'mimetype', None) or '').strip() if img_file is not None else ''
+
+    if ai_flag or not local_ml_available:
+        lang_code = _requested_lang_code()
+        ai = gemini_disease_detection(img_bytes, mime_type=mime_type, response_lang=lang_code)
+        if ai.get('enabled') and isinstance(ai.get('parsed'), dict):
+            p = ai.get('parsed') or {}
+
+            def _clean_str(v):
+                if v is None:
+                    return ''
+                return str(v).strip()
+
+            def _clean_str_list(v):
+                if not isinstance(v, list):
+                    return []
+                out = []
+                for item in v:
+                    s = _clean_str(item)
+                    if s:
+                        out.append(s)
+                return out
+
+            disease_name = _clean_str(p.get('disease')) or 'Unknown'
+            description = _clean_str(p.get('description'))
+            remedies = _clean_str_list(p.get('remedies'))
+            prevention = _clean_str_list(p.get('prevention'))
+            daily_care = _clean_str_list(p.get('daily_care'))
+
+            # Treat placeholder strings as missing.
+            if _is_placeholder_text(description):
+                description = ''
+            if len(remedies) == 1 and _is_placeholder_text(remedies[0]):
+                remedies = []
+            if len(prevention) == 1 and _is_placeholder_text(prevention[0]):
+                prevention = []
+            if len(daily_care) == 1 and _is_placeholder_text(daily_care[0]):
+                daily_care = []
+
+            # If Gemini returns incomplete fields, fill from built-in DISEASE_REMEDIES.
+            filled_from_local = False
+            if (not description) or (not remedies) or (not prevention) or (not daily_care):
+                try:
+                    key = normalize_key_from_label(disease_name)
+                    info = find_remedy(key, disease_name)
+                    if info is not None and info is not DEFAULT_INFO:
+                        if not description:
+                            description = _clean_str(info.get('description'))
+                        if not remedies:
+                            remedies = _clean_str_list(info.get('remedies'))
+                        if not prevention:
+                            prevention = _clean_str_list(info.get('prevention'))
+                        if not daily_care:
+                            daily_care = _clean_str_list(info.get('daily_care'))
+                        filled_from_local = True
+                except Exception:
+                    pass
+
+            # If still missing, ask Gemini (text-only) to fill.
+            if (not description) or (not remedies) or (not prevention) or (not daily_care) or (filled_from_local and _normalize_lang_code(lang_code) != 'en'):
+                filled = _gemini_fill_text_only_disease_info(
+                    disease=disease_name,
+                    lang_code=lang_code,
+                    existing={
+                        'description': description,
+                        'remedies': remedies,
+                        'prevention': prevention,
+                        'daily_care': daily_care,
+                    },
+                )
+                if isinstance(filled, dict):
+                    if not description:
+                        description = _clean_str(filled.get('description'))
+                    if not remedies:
+                        remedies = _clean_str_list(filled.get('remedies'))
+                    if not prevention:
+                        prevention = _clean_str_list(filled.get('prevention'))
+                    if not daily_care:
+                        daily_care = _clean_str_list(filled.get('daily_care'))
+
+            # Localized fallbacks (last resort)
+            fb = _localized_fallback_texts(lang_code)
+            if not description:
+                description = fb['no_desc']
+            if not remedies:
+                remedies = [fb['no_remedies']]
+            if not prevention:
+                prevention = [fb['no_prevention']]
+            if not daily_care:
+                daily_care = [fb['no_daily']]
+
+            return jsonify({
+                "provider": "gemini",
+                "model": ai.get('model'),
+                "lang": lang_code,
+                "disease": disease_name,
+                "confidence": p.get('confidence'),
+                "description": description,
+                "remedies": remedies,
+                "prevention": prevention,
+                "daily_care": daily_care,
+            })
+
+        # If AI was forced, do not silently fall back to local ML
+        if ai_flag:
+            return jsonify({
+                "error": "AI disease detection failed",
+                "reason": ai.get('reason') or 'Unknown',
+                "details": ai.get('details') or '',
+                "url": ai.get('url'),
+                "tried": ai.get('tried'),
+                "hint": "Check GEMINI_API_KEY/GOOGLE_API_KEY and DISEASE_GEMINI_MODEL"
+            }), 503
+
+        # If local ML isn't available and AI failed, return a clear error.
+        if not local_ml_available:
+            return jsonify({
+                "error": "Disease detection is not available on this server",
+                "reason": ai.get('reason') or 'Local ML disabled and AI failed',
+                "details": ai.get('details') or '',
+                "url": ai.get('url'),
+                "tried": ai.get('tried'),
+                "hint": "Set GEMINI_API_KEY (and optionally DISEASE_GEMINI_MODEL) OR install tensorflow/numpy/Pillow"
+            }), 503
+
+    # Local ML path
     try:
         model = load_model_lazy()  #  ⬅ IMPORTANT
     except Exception as e:
         return jsonify({"error": str(e)}), 503
 
-    if "image" not in request.files:
-        return jsonify({"error": "Missing image"}), 400
-
     try:
-        img_bytes = request.files["image"].read()
         x = preprocess_image(img_bytes)
         preds = model.predict(x)[0]
     except Exception as e:
@@ -1590,6 +1799,7 @@ def predict():
     info = find_remedy(key, readable_label)
 
     return jsonify({
+        "provider": "local",
         "index": idx,
         "raw_label": raw_label,
         "disease": readable_label,
@@ -1808,13 +2018,148 @@ def update_prices_for_commodity(commodity, force=False):
 # -----------------------------------------------------
 def _gemini_config():
     api_key = (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
-    model = (os.environ.get('GEMINI_MODEL') or 'gemma-3-4b-it').strip()
+    model = (os.environ.get('GEMINI_MODEL') or 'gemini-2.0-flash').strip()
+    # Optional comma-separated fallback model names to try if the primary model fails.
+    # Example: GEMINI_MODEL_FALLBACKS=gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-flash-8b
+    fallbacks_raw = (os.environ.get('GEMINI_MODEL_FALLBACKS') or '').strip()
+    fallbacks = [m.strip() for m in fallbacks_raw.split(',') if m.strip()] if fallbacks_raw else []
     api_base = (os.environ.get('GEMINI_API_BASE') or 'https://generativelanguage.googleapis.com').strip()
     return {
         'api_key': api_key,
-        'model': model,
+        'model': _normalize_gemini_model_name(model),
+        'fallback_models': fallbacks,
         'api_base': api_base,
     }
+
+
+def _normalize_gemini_model_name(model_name: str) -> str:
+    """Normalize model names from API outputs.
+
+    The Models API returns names like 'models/gemma-3-4b-it'. The generateContent
+    endpoint expects just 'gemma-3-4b-it' in the URL path.
+    """
+    s = (model_name or '').strip()
+    if not s:
+        return ''
+    if s.startswith('models/'):
+        return s[len('models/'):]
+    return s
+
+
+def _iter_unique_models(primary: str, fallbacks=None):
+    seen = set()
+    for m in ([primary] + (fallbacks or [])):
+        mm = _normalize_gemini_model_name(m)
+        if not mm or mm in seen:
+            continue
+        seen.add(mm)
+        yield mm
+
+
+def _model_from_used_url(url: str, default_model: str = None) -> str:
+    if not url:
+        return (default_model or '').strip() or None
+    try:
+        # .../models/<MODEL>:generateContent
+        s = str(url)
+        if '/models/' not in s:
+            return (default_model or '').strip() or None
+        tail = s.split('/models/', 1)[1]
+        model_part = tail.split(':generateContent', 1)[0]
+        model_part = model_part.strip()
+        return model_part or ((default_model or '').strip() or None)
+    except Exception:
+        return (default_model or '').strip() or None
+
+
+@app.route('/api/gemini/models', methods=['GET'])
+def api_gemini_models():
+    """List models visible to the current GEMINI_API_KEY.
+
+    Useful for debugging 404/unsupported-model issues.
+    """
+    cfg = _gemini_config()
+    if not cfg.get('api_key'):
+        return jsonify({'enabled': False, 'error': 'GEMINI_API_KEY not set'}), 503
+
+    base = (cfg.get('api_base') or '').strip().rstrip('/') or 'https://generativelanguage.googleapis.com'
+    key = cfg.get('api_key')
+
+    out = []
+    errors = []
+    for version in ('v1', 'v1beta'):
+        url = f"{base}/{version}/models"
+        try:
+            r = requests.get(url, params={'key': key}, timeout=15)
+            if r.status_code != 200:
+                errors.append({'version': version, 'status': r.status_code, 'details': (r.text[:300] if getattr(r, 'text', None) else '')})
+                continue
+            jd = r.json() if r.content else {}
+            models = jd.get('models') or []
+            for m in models:
+                name = m.get('name')
+                methods = m.get('supportedGenerationMethods') or m.get('supported_generation_methods') or []
+                out.append({'version': version, 'name': name, 'methods': methods})
+        except Exception as e:
+            errors.append({'version': version, 'error': str(e)[:200]})
+
+    return jsonify({'enabled': True, 'count': len(out), 'models': out[:500], 'errors': errors})
+
+
+def _gemini_generate_content_request(
+    *,
+    api_base: str,
+    api_key: str,
+    model: str,
+    fallback_models: list = None,
+    payload_primary: dict,
+    payload_secondary: dict = None,
+    timeout: int = 20,
+):
+    """POST to Gemini REST generateContent.
+
+    Gemini has had multiple REST versions over time. Some hosts now return 404 for
+    deprecated paths (e.g. /v1beta). We try /v1 first, then /v1beta.
+
+    Returns: (response, url_used, tried_urls)
+    Where response may be a requests.Response or an Exception.
+    """
+    base = (api_base or '').strip().rstrip('/') or 'https://generativelanguage.googleapis.com'
+    key = (api_key or '').strip()
+    primary_model = (model or '').strip()
+    tried = []
+    last = None
+    last_url = None
+
+    for m in _iter_unique_models(primary_model, fallback_models):
+        for version in ('v1', 'v1beta'):
+            url = f"{base}/{version}/models/{m}:generateContent"
+            tried.append(url)
+            last_url = url
+            try:
+                r = requests.post(url, params={'key': key}, json=payload_primary, timeout=timeout)
+            except Exception as e:
+                last = e
+                continue
+
+            # Some Gemini/REST variants use snake_case field names.
+            if r.status_code == 400 and payload_secondary is not None:
+                try:
+                    r2 = requests.post(url, params={'key': key}, json=payload_secondary, timeout=timeout)
+                    if r2.status_code == 200 or (r2.text and not r.text):
+                        r = r2
+                except Exception as e:
+                    last = e
+                    continue
+
+            # If this model/version isn't supported, keep trying fallbacks.
+            if r.status_code == 404:
+                last = r
+                continue
+
+            return r, url, tried
+
+    return last, last_url, tried
 
 
 def _extract_json_from_text(text: str):
@@ -1844,6 +2189,70 @@ def _extract_json_from_text(text: str):
         except Exception:
             return None
     return None
+
+
+def _redact_api_key(text: str, api_key: str = None) -> str:
+    if not text:
+        return text
+    out = str(text)
+    try:
+        if api_key:
+            out = out.replace(api_key, 'REDACTED')
+    except Exception:
+        pass
+    try:
+        out = re.sub(r'([?&]key=)[^&\s]+', r'\1REDACTED', out)
+    except Exception:
+        pass
+    return out
+
+
+def _gemini_error_payload(r):
+    """Return (message, details, hint) for a Gemini HTTP error response."""
+    status = getattr(r, 'status_code', None)
+    message = ''
+    details = ''
+
+    try:
+        jd = r.json() if getattr(r, 'content', None) else {}
+    except Exception:
+        jd = {}
+
+    err = (jd.get('error') if isinstance(jd, dict) else None) or {}
+    if isinstance(err, dict):
+        message = (err.get('message') or '').strip()
+        try:
+            details = json.dumps(err, ensure_ascii=False, indent=2)[:1000]
+        except Exception:
+            details = ''
+
+    if not details:
+        try:
+            details = (r.text[:1000] if getattr(r, 'text', None) else '')
+        except Exception:
+            details = ''
+
+    if not message:
+        message = f"Gemini API error {status}" if status else "Gemini API error"
+
+    hint = None
+    if status == 429:
+        hint = (
+            "Quota/rate-limit exceeded for this API key. "
+            "Check your plan/billing and current usage limits in Google AI Studio, "
+            "or wait and retry later."
+        )
+    elif status in (401, 403):
+        hint = (
+            "API key rejected. Verify the key is correct, the Gemini API is enabled for the project/account, "
+            "and the key has no restrictive application/IP referrer rules for your server."
+        )
+    elif status == 404:
+        hint = "Model not found or not available to this key. Try a model name returned by /api/gemini/models."
+    elif status == 400:
+        hint = "Bad request. Check model name and request payload format."
+
+    return message, details, hint
 
 
 def gemini_live_price_summary(commodity: str, items: list, state: str = None, district: str = None, market: str = None):
@@ -1881,27 +2290,52 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
         f"Rows (JSON array): {json.dumps(items_in, ensure_ascii=False)}"
     )
 
-    url = f"{cfg['api_base'].rstrip('/')}/v1beta/models/{cfg['model']}:generateContent"
     try:
-        r = requests.post(
-            url,
-            params={'key': cfg['api_key']},
-            json={
-                'contents': [
-                    {'role': 'user', 'parts': [{'text': prompt}]}
-                ],
-                'generationConfig': {
-                    'temperature': 0.2,
-                    'maxOutputTokens': 512
-                }
-            },
-            timeout=20
+        payload_v1 = {
+            'contents': [
+                {'role': 'user', 'parts': [{'text': prompt}]}
+            ],
+            'generationConfig': {
+                'temperature': 0.2,
+                'maxOutputTokens': 512
+            }
+        }
+        payload_v2 = {
+            'contents': [
+                {'role': 'user', 'parts': [{'text': prompt}]}
+            ],
+            'generation_config': {
+                'temperature': 0.2,
+                'max_output_tokens': 512
+            }
+        }
+
+        r, used_url, tried_urls = _gemini_generate_content_request(
+            api_base=cfg['api_base'],
+            api_key=cfg['api_key'],
+            model=cfg['model'],
+            fallback_models=cfg.get('fallback_models') or [],
+            payload_primary=payload_v1,
+            payload_secondary=payload_v2,
+            timeout=20,
         )
-        if r.status_code != 200:
+
+        if isinstance(r, Exception):
             return {
                 'enabled': False,
-                'reason': f"Gemini API error {r.status_code}",
-                'details': (r.text[:500] if r.text else '')
+                'reason': f"Gemini request failed: {_redact_api_key(str(r), cfg.get('api_key'))}",
+                'url': used_url,
+                'tried': tried_urls,
+            }
+        if r.status_code != 200:
+            msg, details, hint = _gemini_error_payload(r)
+            return {
+                'enabled': False,
+                'reason': msg,
+                'details': details,
+                'hint': hint,
+                'url': used_url,
+                'tried': tried_urls,
             }
 
         data = r.json() if r.content else {}
@@ -1916,17 +2350,373 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
             text = ''
 
         parsed = _extract_json_from_text(text)
+        model_used = _model_from_used_url(used_url, cfg.get('model'))
         return {
             'enabled': True,
-            'model': cfg['model'],
+            'model': model_used,
             'raw_text': text,
             'parsed': parsed
         }
     except Exception as e:
         return {
             'enabled': False,
-            'reason': f"Gemini request failed: {str(e)}"
+            'reason': f"Gemini request failed: {_redact_api_key(str(e), cfg.get('api_key'))}"
         }
+
+
+def _gemini_disease_model_name():
+    """Model name for Gemini disease detection.
+
+    Note: image-based prompts require a multimodal Gemini model.
+    """
+    return (
+        os.environ.get('DISEASE_GEMINI_MODEL')
+        or os.environ.get('GEMINI_DISEASE_MODEL')
+        or 'gemma-3-4b-it'
+    ).strip()
+
+
+def _gemini_disease_model_fallbacks():
+    raw = (
+        os.environ.get('DISEASE_GEMINI_MODEL_FALLBACKS')
+        or os.environ.get('GEMINI_DISEASE_MODEL_FALLBACKS')
+        or ''
+    ).strip()
+    if not raw:
+        return []
+    return [_normalize_gemini_model_name(m) for m in raw.split(',') if (m or '').strip()]
+
+
+def gemini_disease_detection(image_bytes: bytes, mime_type: str = None, response_lang: str = 'en'):
+    """Use Gemini to classify plant disease from an image.
+
+    Returns a dict shaped similarly to the local /predict response.
+    """
+    cfg = _gemini_config()
+    if not cfg['api_key']:
+        return {
+            'enabled': False,
+            'reason': 'GEMINI_API_KEY (or GOOGLE_API_KEY) not configured'
+        }
+
+    mime = (mime_type or '').strip() or 'image/jpeg'
+    try:
+        b64 = base64.b64encode(image_bytes or b'').decode('ascii')
+    except Exception:
+        b64 = ''
+    if not b64:
+        return {
+            'enabled': False,
+            'reason': 'Empty image'
+        }
+
+    model_name = _gemini_disease_model_name()
+    disease_fallbacks = _gemini_disease_model_fallbacks()
+
+    lang_code = _normalize_lang_code(response_lang)
+    lang_names = {
+        'en': 'English',
+        'hi': 'Hindi',
+        'ta': 'Tamil',
+        'kn': 'Kannada',
+        'ml': 'Malayalam',
+    }
+    target_lang = lang_names.get(lang_code, 'English')
+    prompt = (
+        "You are a plant disease detection assistant. "
+        "Analyze the plant image and identify the most likely disease (or Healthy). "
+        "Return ONLY valid JSON with keys: disease, confidence, description, remedies, prevention, daily_care. "
+        "confidence must be a number from 0 to 1. remedies/prevention/daily_care must be arrays of strings. "
+        "IMPORTANT: Return human-readable text, NOT translation keys. "
+        "Do NOT return strings like 'disease.xxx', 'remedy.xxx', 'prevention.xxx', 'daily.xxx' or '...\.description'. "
+        "If the crop/plant is recognizable, include the crop name in the disease field (e.g., 'Apple Scab', 'Pear Fire Blight'). "
+        "description must not be empty. "
+        f"Answer in {target_lang}. "
+        "Keep answers short and practical."
+    )
+
+    def _humanize_keyish_text(val):
+        """Convert i18n-like keys (e.g. 'disease.foo_bar.description') into readable text."""
+        if val is None:
+            return val
+        if isinstance(val, (int, float, bool)):
+            return val
+        s = str(val).strip()
+        if not s:
+            return s
+        # Strip common suffixes and prefixes
+        s = re.sub(r"\.(description|details|info)$", "", s, flags=re.IGNORECASE)
+        s = re.sub(r"^(disease|remedy|prevention|daily|daily_care)\.", "", s, flags=re.IGNORECASE)
+        # If dotted, keep last segment
+        if '.' in s:
+            s = s.split('.')[-1]
+        # Replace underscores/delimiters with spaces
+        s = re.sub(r"[^a-zA-Z0-9]+", " ", s).strip()
+        s = re.sub(r"\s+", " ", s)
+        # Title case words
+        s = " ".join([w[:1].upper() + w[1:] if w else "" for w in s.split(" ")]).strip()
+        return s
+
+    def _sanitize_gemini_disease_payload(p):
+        if not isinstance(p, dict):
+            return p
+        out = dict(p)
+        out['disease'] = _humanize_keyish_text(out.get('disease'))
+        out['description'] = _humanize_keyish_text(out.get('description'))
+        for k in ('remedies', 'prevention', 'daily_care'):
+            v = out.get(k)
+            if isinstance(v, list):
+                out[k] = [_humanize_keyish_text(x) for x in v]
+            elif v is None:
+                out[k] = []
+            else:
+                out[k] = [_humanize_keyish_text(v)]
+        return out
+
+    try:
+        payload_v1 = {
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [
+                        {'text': prompt},
+                        {
+                            'inlineData': {
+                                'mimeType': mime,
+                                'data': b64
+                            }
+                        }
+                    ]
+                }
+            ],
+            'generationConfig': {
+                'temperature': 0.2,
+                'maxOutputTokens': 512
+            }
+        }
+
+        payload_v2 = {
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [
+                        {'text': prompt},
+                        {
+                            'inline_data': {
+                                'mime_type': mime,
+                                'data': b64
+                            }
+                        }
+                    ]
+                }
+            ],
+            'generation_config': {
+                'temperature': 0.2,
+                'max_output_tokens': 512
+            }
+        }
+
+        r, used_url, tried_urls = _gemini_generate_content_request(
+            api_base=cfg['api_base'],
+            api_key=cfg['api_key'],
+            model=model_name,
+            fallback_models=disease_fallbacks,
+            payload_primary=payload_v1,
+            payload_secondary=payload_v2,
+            timeout=25,
+        )
+
+        if isinstance(r, Exception):
+            return {
+                'enabled': False,
+                'reason': f"Gemini request failed: {_redact_api_key(str(r), cfg.get('api_key'))}",
+                'url': used_url,
+                'tried': tried_urls,
+            }
+        if r.status_code != 200:
+            msg, details, hint = _gemini_error_payload(r)
+            return {
+                'enabled': False,
+                'reason': msg,
+                'details': details,
+                'hint': hint,
+                'url': used_url,
+                'tried': tried_urls,
+            }
+
+        data = r.json() if r.content else {}
+        text = ''
+        try:
+            cand0 = (data.get('candidates') or [])[0] if (data.get('candidates') or []) else {}
+            parts = (((cand0.get('content') or {}).get('parts')) or [])
+            if parts and isinstance(parts[0], dict):
+                text = parts[0].get('text') or ''
+        except Exception:
+            text = ''
+
+        parsed = _extract_json_from_text(text)
+        model_used = _model_from_used_url(used_url, model_name)
+        if not isinstance(parsed, dict):
+            return {
+                'enabled': True,
+                'model': model_used,
+                'raw_text': text,
+                'parsed': None,
+                'reason': 'Model did not return JSON'
+            }
+
+        return {
+            'enabled': True,
+            'model': model_used,
+            'raw_text': text,
+            'parsed': _sanitize_gemini_disease_payload(parsed)
+        }
+    except Exception as e:
+        return {
+            'enabled': False,
+            'reason': f"Gemini request failed: {_redact_api_key(str(e), cfg.get('api_key'))}"
+        }
+
+
+# -----------------------------------------------------
+#   GEMINI AGENT FOR DISEASE FOLLOW-UP QUESTIONS
+# -----------------------------------------------------
+@app.route("/disease/ask", methods=["POST"])
+def disease_ask():
+    """Handle follow-up questions about a detected plant disease using Gemini."""
+    data = request.get_json(silent=True) or {}
+    question = (data.get('question') or '').strip()
+    disease = (data.get('disease') or '').strip()
+    context = data.get('context') or {}
+
+    if not question:
+        return jsonify({"error": "Missing question"}), 400
+
+    cfg = _gemini_config()
+    if not cfg['api_key']:
+        return jsonify({
+            "enabled": False,
+            "error": "AI assistant not configured",
+            "reason": "GEMINI_API_KEY not set"
+        }), 503
+
+    model_name = _gemini_disease_model_name()
+    disease_fallbacks = _gemini_disease_model_fallbacks()
+
+    lang_code = _requested_lang_code()
+    lang_names = {
+        'en': 'English',
+        'hi': 'Hindi',
+        'ta': 'Tamil',
+        'kn': 'Kannada',
+        'ml': 'Malayalam',
+    }
+    target_lang = lang_names.get(lang_code, 'English')
+
+    # Build context from previous disease detection
+    context_text = ""
+    if disease:
+        context_text += f"The detected plant disease is: {disease}. "
+    if context.get('description'):
+        context_text += f"Description: {context['description']}. "
+    if context.get('remedies') and isinstance(context['remedies'], list):
+        context_text += f"Suggested remedies: {', '.join(context['remedies'])}. "
+    if context.get('prevention') and isinstance(context['prevention'], list):
+        context_text += f"Prevention tips: {', '.join(context['prevention'])}. "
+
+    prompt = (
+        "You are an expert agricultural assistant specializing in plant diseases. "
+        f"{context_text}"
+        f"The farmer has the following question: {question}\n\n"
+        "Provide a helpful, practical, and concise answer. "
+        "Focus on actionable advice. Keep the response under 200 words. "
+        f"Answer in {target_lang}. "
+        "If you don't know the answer, say so honestly."
+    )
+
+    try:
+        payload_v1 = {
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [{'text': prompt}]
+                }
+            ],
+            'generationConfig': {
+                'temperature': 0.3,
+                'maxOutputTokens': 512
+            }
+        }
+
+        payload_v2 = {
+            'contents': [
+                {
+                    'role': 'user',
+                    'parts': [{'text': prompt}]
+                }
+            ],
+            'generation_config': {
+                'temperature': 0.3,
+                'max_output_tokens': 512
+            }
+        }
+
+        r, used_url, tried_urls = _gemini_generate_content_request(
+            api_base=cfg['api_base'],
+            api_key=cfg['api_key'],
+            model=model_name,
+            fallback_models=disease_fallbacks,
+            payload_primary=payload_v1,
+            payload_secondary=payload_v2,
+            timeout=25,
+        )
+
+        if isinstance(r, Exception):
+            return jsonify({
+                "enabled": False,
+                "error": "AI request failed",
+                "reason": _redact_api_key(str(r), cfg.get('api_key'))
+            }), 503
+
+        if r.status_code != 200:
+            msg, details, hint = _gemini_error_payload(r)
+            return jsonify({
+                "enabled": False,
+                "error": msg,
+                "details": details,
+                "hint": hint,
+            }), 503
+
+        data_resp = r.json() if r.content else {}
+        answer = ''
+        try:
+            cand0 = (data_resp.get('candidates') or [])[0] if (data_resp.get('candidates') or []) else {}
+            parts = (((cand0.get('content') or {}).get('parts')) or [])
+            if parts and isinstance(parts[0], dict):
+                answer = parts[0].get('text') or ''
+        except Exception:
+            answer = ''
+
+        if not answer:
+            return jsonify({
+                "enabled": True,
+                "model": _model_from_used_url(used_url, model_name),
+                "answer": "I could not generate a response. Please try rephrasing your question."
+            })
+
+        return jsonify({
+            "enabled": True,
+            "model": _model_from_used_url(used_url, model_name),
+            "answer": answer.strip()
+        })
+
+    except Exception as e:
+        return jsonify({
+            "enabled": False,
+            "error": "AI request failed",
+            "reason": _redact_api_key(str(e), cfg.get('api_key'))
+        }), 503
+
 
 # -----------------------------------------------------
 #   Scheduler: daily refresh
@@ -2185,14 +2975,43 @@ def write_products(pdata, force=False):
 
 @app.route('/model/status')
 def model_status():
-    """Return whether ML model is loaded and any diagnostics message."""
+    """Return whether ML model is ready (and load it on demand)."""
     try:
-        loaded = model is not None
-        msg = 'Model loaded' if loaded else 'Model not loaded'
+        tf_ver = getattr(tf, '__version__', None) if tf is not None else None
+        try:
+            import keras as _keras
+            keras_ver = getattr(_keras, '__version__', None)
+        except Exception:
+            keras_ver = None
+
+        if tf is None:
+            return jsonify({
+                'loaded': False,
+                'message': 'TensorFlow not installed',
+                'python': sys.executable if 'sys' in globals() else None,
+                'tf': tf_ver,
+                'keras': keras_ver,
+            }), 200
+
+        try:
+            load_model_lazy()
+            return jsonify({
+                'loaded': True,
+                'message': 'Model loaded',
+                'python': sys.executable if 'sys' in globals() else None,
+                'tf': tf_ver,
+                'keras': keras_ver,
+            }), 200
+        except Exception as e:
+            return jsonify({
+                'loaded': False,
+                'message': f'Model not loaded: {e}',
+                'python': sys.executable if 'sys' in globals() else None,
+                'tf': tf_ver,
+                'keras': keras_ver,
+            }), 200
     except Exception as e:
-        loaded = False
-        msg = f'Error checking model: {e}'
-    return jsonify({'loaded': loaded, 'message': msg})
+        return jsonify({'loaded': False, 'message': f'Error checking model: {e}'}), 200
 
 
 # --------------------
@@ -2210,57 +3029,229 @@ def weather_page():
 @app.route('/api/weather')
 def api_weather():
     """Proxy endpoint to fetch weather forecast and produce simple advice.
-    Accepts query parameters: lat, lon OR q (city name). Requires env var WEATHER_API_KEY.
+    Accepts query parameters: lat, lon OR q (city name).
+    Uses OpenWeather when WEATHER_API_KEY is configured; otherwise falls back to Open-Meteo.
     Returns the upstream forecast JSON under `forecast` and an `advice` array.
     """
+    def _open_meteo_weather_desc(code):
+        # https://open-meteo.com/en/docs (WMO weather interpretation codes)
+        try:
+            c = int(code)
+        except Exception:
+            return ''
+        mapping = {
+            0: 'Clear sky',
+            1: 'Mainly clear',
+            2: 'Partly cloudy',
+            3: 'Overcast',
+            45: 'Fog',
+            48: 'Depositing rime fog',
+            51: 'Light drizzle',
+            53: 'Moderate drizzle',
+            55: 'Dense drizzle',
+            61: 'Slight rain',
+            63: 'Moderate rain',
+            65: 'Heavy rain',
+            71: 'Slight snow fall',
+            73: 'Moderate snow fall',
+            75: 'Heavy snow fall',
+            80: 'Rain showers',
+            81: 'Heavy rain showers',
+            82: 'Violent rain showers',
+            95: 'Thunderstorm',
+            96: 'Thunderstorm with hail',
+            99: 'Thunderstorm with heavy hail',
+        }
+        return mapping.get(c, f'Weather code {c}')
+
+    def _open_meteo_geocode(name: str):
+        url = 'https://geocoding-api.open-meteo.com/v1/search'
+        r = requests.get(url, params={'name': name, 'count': 1, 'language': 'en', 'format': 'json'}, timeout=12)
+        if r.status_code != 200:
+            return None, None, {'error': 'Geocoding failed', 'details': r.text}
+        jd = r.json() if r.content else {}
+        results = jd.get('results') or []
+        if not results:
+            return None, None, {'error': 'Could not resolve location name'}
+        top = results[0]
+        return top.get('latitude'), top.get('longitude'), None
+
+    def _open_meteo_fetch_onecall_like(lat_v, lon_v):
+        url = 'https://api.open-meteo.com/v1/forecast'
+        params = {
+            'latitude': lat_v,
+            'longitude': lon_v,
+            'hourly': 'temperature_2m,precipitation_probability,windspeed_10m,weathercode',
+            'daily': 'temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max,weathercode',
+            'timezone': 'auto',
+            'forecast_days': 7,
+        }
+        r = requests.get(url, params=params, timeout=12)
+        if r.status_code != 200:
+            return None, {'error': 'Weather provider error', 'details': r.text}
+
+        om = r.json() if r.content else {}
+        daily = (om or {}).get('daily') or {}
+        times = daily.get('time') or []
+        tmax = daily.get('temperature_2m_max') or []
+        tmin = daily.get('temperature_2m_min') or []
+        pop = daily.get('precipitation_probability_max') or []
+        wind = daily.get('windspeed_10m_max') or []
+        wcode = daily.get('weathercode') or []
+
+        # Hourly arrays
+        hourly = (om or {}).get('hourly') or {}
+        h_times = hourly.get('time') or []
+        h_temp = hourly.get('temperature_2m') or []
+        h_pop = hourly.get('precipitation_probability') or []
+        h_wind = hourly.get('windspeed_10m') or []
+        h_wcode = hourly.get('weathercode') or []
+
+        out_hourly = []
+        for i, t in enumerate(h_times[:48]):
+            # open-meteo hourly time is usually like 2026-03-06T01:00
+            try:
+                dt = int(time.mktime(datetime.strptime(t, '%Y-%m-%dT%H:%M').timetuple()))
+            except Exception:
+                try:
+                    dt = int(time.mktime(datetime.fromisoformat(t).timetuple()))
+                except Exception:
+                    dt = None
+
+            try:
+                pop_pct = h_pop[i] if i < len(h_pop) else None
+                pop_frac = (float(pop_pct) / 100.0) if pop_pct is not None else 0
+            except Exception:
+                pop_frac = 0
+
+            code_i = h_wcode[i] if i < len(h_wcode) else None
+            out_hourly.append({
+                'dt': dt,
+                'temp': (h_temp[i] if i < len(h_temp) else None),
+                'pop': pop_frac,
+                'wind_speed': (h_wind[i] if i < len(h_wind) else None),
+                'weather': [{'id': 0, 'description': _open_meteo_weather_desc(code_i)}],
+                'weathercode': code_i,
+            })
+
+        out_daily = []
+        for i, d in enumerate(times[:7]):
+            try:
+                dt = int(time.mktime(datetime.strptime(d, '%Y-%m-%d').timetuple()))
+            except Exception:
+                dt = None
+
+            try:
+                pop_pct = pop[i] if i < len(pop) else None
+                pop_frac = (float(pop_pct) / 100.0) if pop_pct is not None else 0
+            except Exception:
+                pop_frac = 0
+
+            code_i = wcode[i] if i < len(wcode) else None
+            out_daily.append({
+                'dt': dt,
+                'temp': {
+                    'max': (tmax[i] if i < len(tmax) else None),
+                    'min': (tmin[i] if i < len(tmin) else None),
+                },
+                'pop': pop_frac,
+                'wind_speed': (wind[i] if i < len(wind) else None),
+                # Keep a OneCall-like weather object so the frontend can render `description`.
+                'weather': [{'id': 0, 'description': _open_meteo_weather_desc(code_i)}],
+                'weathercode': code_i,
+            })
+
+        payload = {
+            'provider': 'open-meteo',
+            'latitude': (om or {}).get('latitude'),
+            'longitude': (om or {}).get('longitude'),
+            'timezone': (om or {}).get('timezone'),
+            'hourly': out_hourly,
+            'daily': out_daily,
+        }
+        return payload, None
+
     key = os.environ.get('WEATHER_API_KEY')
-    if not key:
-        hint = 'Set WEATHER_API_KEY in the environment or in a .env file. See .env.example for format.'
-        example = 'WEATHER_API_KEY=your_openweather_api_key_here'
-        return jsonify({'error': 'WEATHER_API_KEY not configured on server', 'hint': hint, 'example_env': example}), 400
+    use_open_meteo = not bool((key or '').strip())
 
     lat = request.args.get('lat')
     lon = request.args.get('lon')
     q = request.args.get('q')
     try:
-        # If no coordinates provided but a query (city) is given, geocode first
-        if (not lat or not lon) and q:
-            geo_url = 'http://api.openweathermap.org/geo/1.0/direct'
-            gr = requests.get(geo_url, params={'q': q, 'limit': 1, 'appid': key}, timeout=10)
-            if gr.status_code != 200:
-                return jsonify({'error': 'Geocoding failed', 'details': gr.text}), 502
-            gdata = gr.json()
-            if not gdata:
-                return jsonify({'error': 'Could not resolve location name'}), 400
-            lat = gdata[0].get('lat')
-            lon = gdata[0].get('lon')
+        payload = None
+        if use_open_meteo:
+            # Fallback provider (no API key): Open-Meteo
+            if (not lat or not lon) and q:
+                lat2, lon2, err = _open_meteo_geocode(q)
+                if err:
+                    return jsonify(err), 502
+                lat, lon = lat2, lon2
 
-        if not lat or not lon:
-            return jsonify({'error': 'Provide lat & lon or q (city name) as query parameters.'}), 400
+            if not lat or not lon:
+                return jsonify({'error': 'Provide lat & lon or q (city name) as query parameters.'}), 400
 
-        # One Call API for forecast (exclude minutely & alerts to reduce payload)
-        owm = 'https://api.openweathermap.org/data/2.5/onecall'
-        resp = requests.get(owm, params={'lat': lat, 'lon': lon, 'exclude': 'minutely,alerts', 'units': 'metric', 'appid': key}, timeout=12)
-        if resp.status_code != 200:
-            # log provider failure and attempt a fallback to 3-hour forecast endpoint
-            try:
-                print('[WEATHER] OneCall failed:', resp.status_code, resp.text[:500])
-            except Exception:
-                pass
-            # fallback to 3-hour forecast which is commonly available on free tier
-            try:
-                fb = requests.get('https://api.openweathermap.org/data/2.5/forecast', params={'lat': lat, 'lon': lon, 'units': 'metric', 'appid': key}, timeout=12)
-                if fb.status_code == 200:
-                    fbp = fb.json()
-                    payload = {'fallback_forecast': fbp}
-                else:
-                    # return both error snippets for diagnosis
-                    return jsonify({'error': 'Weather provider error', 'onecall_status': resp.status_code, 'onecall_body': resp.text, 'fallback_status': fb.status_code, 'fallback_body': fb.text}), 502
-            except Exception as e:
-                print('[WEATHER] Fallback fetch exception', e)
-                return jsonify({'error': 'Weather provider error', 'details': str(e), 'onecall_status': resp.status_code, 'onecall_body': resp.text}), 502
+            payload, err = _open_meteo_fetch_onecall_like(lat, lon)
+            if err:
+                return jsonify(err), 502
         else:
-            payload = resp.json()
+            # OpenWeather (requires WEATHER_API_KEY)
+            # If no coordinates provided but a query (city) is given, geocode first
+            if (not lat or not lon) and q:
+                geo_url = 'http://api.openweathermap.org/geo/1.0/direct'
+                gr = requests.get(geo_url, params={'q': q, 'limit': 1, 'appid': key}, timeout=10)
+                if gr.status_code in (401, 403):
+                    # Key exists but is rejected; fall back to Open-Meteo geocoding + forecast.
+                    lat2, lon2, err = _open_meteo_geocode(q)
+                    if err:
+                        return jsonify(err), 502
+                    lat, lon = lat2, lon2
+                    payload, err = _open_meteo_fetch_onecall_like(lat, lon)
+                    if err:
+                        return jsonify(err), 502
+                else:
+                    if gr.status_code != 200:
+                        return jsonify({'error': 'Geocoding failed', 'details': gr.text}), 502
+                    gdata = gr.json()
+                    if not gdata:
+                        return jsonify({'error': 'Could not resolve location name'}), 400
+                    lat = gdata[0].get('lat')
+                    lon = gdata[0].get('lon')
+
+            if not lat or not lon:
+                return jsonify({'error': 'Provide lat & lon or q (city name) as query parameters.'}), 400
+
+            # If we already fell back to Open-Meteo (due to rejected key), skip OpenWeather calls.
+            if payload is None:
+                # One Call API for forecast (exclude minutely & alerts to reduce payload)
+                owm = 'https://api.openweathermap.org/data/2.5/onecall'
+                resp = requests.get(owm, params={'lat': lat, 'lon': lon, 'exclude': 'minutely,alerts', 'units': 'metric', 'appid': key}, timeout=12)
+                if resp.status_code != 200:
+                    # log provider failure and attempt a fallback to 3-hour forecast endpoint
+                    try:
+                        print('[WEATHER] OneCall failed:', resp.status_code, resp.text[:500])
+                    except Exception:
+                        pass
+
+                    if resp.status_code in (401, 403):
+                        # Key exists but is rejected; fall back to Open-Meteo forecast.
+                        payload, err = _open_meteo_fetch_onecall_like(lat, lon)
+                        if err:
+                            return jsonify(err), 502
+                    else:
+                        # fallback to 3-hour forecast which is commonly available on free tier
+                        try:
+                            fb = requests.get('https://api.openweathermap.org/data/2.5/forecast', params={'lat': lat, 'lon': lon, 'units': 'metric', 'appid': key}, timeout=12)
+                            if fb.status_code == 200:
+                                fbp = fb.json()
+                                payload = {'fallback_forecast': fbp}
+                            else:
+                                # return both error snippets for diagnosis
+                                return jsonify({'error': 'Weather provider error', 'onecall_status': resp.status_code, 'onecall_body': resp.text, 'fallback_status': fb.status_code, 'fallback_body': fb.text}), 502
+                        except Exception as e:
+                            print('[WEATHER] Fallback fetch exception', e)
+                            return jsonify({'error': 'Weather provider error', 'details': str(e), 'onecall_status': resp.status_code, 'onecall_body': resp.text}), 502
+                else:
+                    payload = resp.json()
 
         # Build a short human-friendly summary for frontends.
         summary = ''

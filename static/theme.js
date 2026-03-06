@@ -4,8 +4,8 @@
     var t = null;
     try{ t = localStorage.getItem('agri_theme'); }catch(e){}
     if(!t){
-      // default to light for wide familiarity, but allow dark as preference
-      t = 'light';
+      // default to dark; user can switch to light later
+      t = 'dark';
     }
     if(t === 'dark'){
       try{ document.body.classList.add('dark-mode'); }catch(e){}
@@ -117,8 +117,17 @@ document.addEventListener('DOMContentLoaded', ()=>{
               Object.keys(langs).forEach(k=>{
                 const d = document.createElement('div'); d.className='lang-option'; d.dataset.lang = k; d.textContent = langs[k];
                 d.addEventListener('click', ()=>{
-                  try{ localStorage.setItem('agri_lang', k); const label = document.getElementById('fab-lang-label'); if(label) label.textContent = langs[k]; if(window.setLanguage) window.setLanguage(k); try{ if(window.applyTranslations) window.applyTranslations(); else if(window.ensureI18nLoaded) window.ensureI18nLoaded(()=>{ if(window.applyTranslations) window.applyTranslations(); }); }catch(e){};
-                  menu.classList.remove('active');
+                  try{
+                    localStorage.setItem('agri_lang', k);
+                    const label = document.getElementById('fab-lang-label');
+                    if(label) label.textContent = langs[k];
+                    if(window.setLanguage) window.setLanguage(k);
+                    try{
+                      if(window.applyTranslations) window.applyTranslations();
+                      else if(window.ensureI18nLoaded) window.ensureI18nLoaded(()=>{ if(window.applyTranslations) window.applyTranslations(); });
+                    }catch(e){}
+                    menu.classList.remove('active');
+                  }catch(e){}
                 });
                 container.appendChild(d);
               });

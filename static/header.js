@@ -8,6 +8,10 @@
       document.body.classList.remove('dark-mode');
     } else if(saved === 'dark'){
       document.body.classList.add('dark-mode');
+    } else {
+      // default to dark on first visit
+      document.body.classList.add('dark-mode');
+      localStorage.setItem('agri_theme', 'dark');
     }
   }catch(e){ /* ignore theme apply errors */ }
 
@@ -141,7 +145,10 @@
   }
 
   // hook up theme toggle button (if present)
-  try{ const tb = document.getElementById('theme-toggle'); if(tb){ tb.addEventListener('click', toggleTheme); /* init label */ const saved=localStorage.getItem('agri_theme')||'light'; tb.textContent = saved==='dark'?'🌙':'☀️'; } }catch(e){}
+  try{ const tb = document.getElementById('theme-toggle'); if(tb){ tb.addEventListener('click', toggleTheme); /* init label */ const saved=localStorage.getItem('agri_theme')||'dark'; tb.textContent = saved==='dark'?'🌙':'☀️'; } }catch(e){}
+
+  // Ensure a theme is always selected for first-time visitors
+  try{ if(!localStorage.getItem('agri_theme')){ localStorage.setItem('agri_theme','dark'); document.body.classList.add('dark-mode'); } }catch(e){}
 
   // fetch user info
   try{
