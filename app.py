@@ -968,24 +968,8 @@ def _smtp_is_configured() -> bool:
     return bool(sender_email and app_password)
 
 
-def _resend_is_configured() -> bool:
-    api_key = (os.getenv('RESEND_API_KEY') or '').strip()
-    from_email = (os.getenv('RESEND_FROM') or '').strip()
-    return bool(api_key and from_email)
-
-
-def _email_provider() -> str:
-    # auto: prefer Resend when configured (best for Render), else SMTP
-    return (os.getenv('EMAIL_PROVIDER') or 'auto').strip().lower()
-
-
 def _email_is_configured() -> bool:
-    p = _email_provider()
-    if p == 'resend':
-        return _resend_is_configured()
-    if p == 'smtp':
-        return _smtp_is_configured()
-    return _resend_is_configured() or _smtp_is_configured()
+    return _smtp_is_configured()
 
 
 def _smtp_timeout_seconds() -> float:
@@ -1025,56 +1009,8 @@ def _send_otp_smtp(receiver_email: str, otp: str) -> bool:
     return True
 
 
-def _send_otp_resend(receiver_email: str, otp: str) -> bool:
-    """Send OTP via Resend HTTPS API (recommended on Render if SMTP ports are blocked)."""
-    api_key = (os.getenv('RESEND_API_KEY') or '').strip()
-    from_email = (os.getenv('RESEND_FROM') or '').strip()
-    if not api_key or not from_email:
-        raise RuntimeError('Resend not configured: set RESEND_API_KEY and RESEND_FROM')
-
-    payload = {
-        'from': from_email,
-        'to': [receiver_email],
-        'subject': 'OTP Verification',
-        'text': f'Your OTP is {otp}',
-    }
-
-    try:
-        r = requests.post(
-            'https://api.resend.com/emails',
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/json',
-            },
-            json=payload,
-            timeout=12,
-        )
-    except Exception as e:
-        raise RuntimeError(f'Resend request failed: {e}')
-
-    if r.status_code not in (200, 201):
-        body = (r.text or '')
-        body = body[:400] + ('…' if len(body) > 400 else '')
-        raise RuntimeError(f'Resend error {r.status_code}: {body}')
-    return True
-
-
 def send_otp(receiver_email, otp):
-    """Send OTP via configured provider.
-
-    Providers:
-      - EMAIL_PROVIDER=auto (default): prefer Resend if configured else SMTP
-      - EMAIL_PROVIDER=resend: force Resend
-      - EMAIL_PROVIDER=smtp: force Gmail SMTP
-    """
-    provider = _email_provider()
-    if provider == 'resend':
-        return _send_otp_resend(receiver_email, otp)
-    if provider == 'smtp':
-        return _send_otp_smtp(receiver_email, otp)
-    # auto
-    if _resend_is_configured():
-        return _send_otp_resend(receiver_email, otp)
+    """Send OTP via Gmail SMTP (TLS 587) using an App Password."""
     return _send_otp_smtp(receiver_email, otp)
 
 
@@ -1126,7 +1062,7 @@ def request_otp():
             return jsonify({
                 "success": False,
                 "message": "Email not configured on server",
-                "hint": "Set EMAIL_PROVIDER (auto/smtp/resend) and provider env vars. For Gmail SMTP: EMAIL_USER + EMAIL_PASS. For Resend: RESEND_API_KEY + RESEND_FROM."
+                "hint": "Set EMAIL_USER (Gmail) and EMAIL_PASS (Gmail App Password)."
             }), 500
 
         otp = str(random.randint(100000, 999999))
@@ -1145,7 +1081,7 @@ def request_otp():
             return jsonify({
                 "success": False,
                 "message": "Failed to send OTP email",
-                "hint": "On Render, Gmail SMTP may be blocked; prefer Resend (EMAIL_PROVIDER=resend) or set SMTP_TIMEOUT to fail fast. Check server logs for details."
+                "hint": "On Render, if SMTP is slow/blocked, set SMTP_TIMEOUT to fail fast. Check server logs for details."
             }), 502
 
     except Exception as e:
