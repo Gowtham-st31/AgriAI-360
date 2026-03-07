@@ -960,6 +960,7 @@ def update_order_by_id(order_id, updates: dict):
 import smtplib
 from email.mime.text import MIMEText
 import os
+import requests
 
 
 def _smtp_is_configured() -> bool:
@@ -968,8 +969,33 @@ def _smtp_is_configured() -> bool:
     return bool(sender_email and app_password)
 
 
+def _brevo_is_configured() -> bool:
+    api_key = (os.getenv('BREVO_API_KEY') or '').strip()
+    from_email = (os.getenv('BREVO_FROM') or '').strip()
+    return bool(api_key and from_email)
+
+
+def _email_provider() -> str:
+    return (os.getenv('EMAIL_PROVIDER') or 'auto').strip().lower()
+
+
+def _email_hint_for_provider(provider: str) -> str:
+    p = (provider or '').strip().lower() or 'auto'
+    if p == 'smtp':
+        return 'Set EMAIL_USER (Gmail) and EMAIL_PASS (Gmail App Password).'
+    if p == 'brevo':
+        return 'Set BREVO_API_KEY and BREVO_FROM (verified sender) in environment.'
+    return 'Configure at least one provider: SMTP (EMAIL_USER/EMAIL_PASS) or Brevo (BREVO_API_KEY/BREVO_FROM).'
+
+
 def _email_is_configured() -> bool:
-    return _smtp_is_configured()
+    p = _email_provider()
+    if p == 'smtp':
+        return _smtp_is_configured()
+    if p == 'brevo':
+        return _brevo_is_configured()
+    # auto
+    return _smtp_is_configured() or _brevo_is_configured()
 
 
 def _smtp_timeout_seconds() -> float:
@@ -1009,9 +1035,81 @@ def _send_otp_smtp(receiver_email: str, otp: str) -> bool:
     return True
 
 
+def _http_timeout_seconds() -> float:
+    """Timeout for HTTP email APIs (Brevo/Resend)."""
+    try:
+        v = float(os.getenv('EMAIL_HTTP_TIMEOUT', os.getenv('SMTP_TIMEOUT', '8')).strip())
+        return 2.0 if v < 2 else v
+    except Exception:
+        return 8.0
+
+
+def _send_otp_brevo(receiver_email: str, otp: str) -> bool:
+    """Send OTP using Brevo Transactional Email API."""
+    api_key = (os.getenv('BREVO_API_KEY') or '').strip()
+    from_email = (os.getenv('BREVO_FROM') or '').strip()
+    sender_name = (os.getenv('BREVO_SENDER_NAME') or 'AgriAI360').strip() or 'AgriAI360'
+    if not api_key or not from_email:
+        raise RuntimeError('Brevo not configured: set BREVO_API_KEY and BREVO_FROM')
+
+    payload = {
+        'sender': {
+            'email': from_email,
+            'name': sender_name,
+        },
+        'to': [
+            {'email': receiver_email},
+        ],
+        'subject': 'OTP Verification',
+        'textContent': f'Your OTP is {otp}',
+    }
+
+    headers = {
+        'accept': 'application/json',
+        'content-type': 'application/json',
+        'api-key': api_key,
+    }
+
+    timeout = _http_timeout_seconds()
+    resp = requests.post('https://api.brevo.com/v3/smtp/email', json=payload, headers=headers, timeout=timeout)
+    if resp.status_code in (200, 201, 202):
+        return True
+    raise RuntimeError(f'Brevo send failed: HTTP {resp.status_code}: {resp.text}')
+
+
 def send_otp(receiver_email, otp):
-    """Send OTP via Gmail SMTP (TLS 587) using an App Password."""
-    return _send_otp_smtp(receiver_email, otp)
+    """Send OTP using configured provider.
+
+    Providers:
+      - smtp: Gmail SMTP (TLS 587)
+      - brevo: Brevo Transactional Email API
+            - auto: try smtp -> brevo
+    """
+    provider = _email_provider()
+    if provider == 'smtp':
+        return _send_otp_smtp(receiver_email, otp)
+    if provider == 'brevo':
+        return _send_otp_brevo(receiver_email, otp)
+
+    # auto fallback (SMTP first, as requested)
+    errors = []
+    if _smtp_is_configured():
+        try:
+            return _send_otp_smtp(receiver_email, otp)
+        except Exception as e:
+            errors.append(('smtp', e))
+    if _brevo_is_configured():
+        try:
+            return _send_otp_brevo(receiver_email, otp)
+        except Exception as e:
+            errors.append(('brevo', e))
+
+    if not errors:
+        raise RuntimeError('No email provider configured. Set EMAIL_PROVIDER and credentials.')
+
+    summary = '; '.join([f"{name}={type(err).__name__}" for name, err in errors])
+    # keep details in server logs; raise a short message
+    raise RuntimeError(f'All email providers failed ({summary})')
 
 
 def send_otp_email(email, otp):
@@ -1059,10 +1157,11 @@ def request_otp():
             return jsonify({"success": False, "message": "Email required"}), 400
 
         if not _email_is_configured():
+            provider = _email_provider()
             return jsonify({
                 "success": False,
                 "message": "Email not configured on server",
-                "hint": "Set EMAIL_USER (Gmail) and EMAIL_PASS (Gmail App Password)."
+                "hint": _email_hint_for_provider(provider)
             }), 500
 
         otp = str(random.randint(100000, 999999))
@@ -1078,10 +1177,11 @@ def request_otp():
         except Exception as e:
             # Do not leak sensitive details; give actionable hint.
             print(f"[OTP] send failed for {email}: {e}")
+            provider = _email_provider()
             return jsonify({
                 "success": False,
                 "message": "Failed to send OTP email",
-                "hint": "On Render, if SMTP is slow/blocked, set SMTP_TIMEOUT to fail fast. Check server logs for details."
+                "hint": "If SMTP is blocked/slow, keep EMAIL_PROVIDER=auto and set Brevo/Resend keys, or set EMAIL_PROVIDER=brevo/resend. Check server logs for details."
             }), 502
 
     except Exception as e:
@@ -1193,6 +1293,7 @@ def register():
     session["register_password_hash"] = p_hash
 
     if not _email_is_configured():
+        provider = _email_provider()
         return {"success": False, "message": "Email not configured on server"}, 500
 
     otp = str(random.randint(100000, 999999))

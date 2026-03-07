@@ -1,6 +1,10 @@
-# OTP Email (Gmail SMTP)
+# OTP Email (SMTP + Brevo fallback)
 
-This project sends OTP emails via Gmail SMTP (TLS 587) using an App Password.
+This project can send OTP emails using:
+- Gmail SMTP (TLS 587)
+- Brevo (Sendinblue) Transactional Email API
+
+By default (`EMAIL_PROVIDER=auto`) it tries SMTP first, and if SMTP fails it falls back to Brevo (if configured).
 
 1) Enable Gmail App Password
 
@@ -31,7 +35,21 @@ pip install -r requirements.txt
 python .\app.py
 ```
 
-3) Troubleshooting
+3) Brevo setup (recommended fallback)
+
+- Create a Brevo API key (Transactional) and verify your sender.
+- Set these variables:
+	- `BREVO_API_KEY`
+	- `BREVO_FROM` (must be a verified sender email in Brevo)
+	- Optional: `BREVO_SENDER_NAME`
+
+4) Provider selection
+
+- `EMAIL_PROVIDER=auto` (default): SMTP → Brevo
+- `EMAIL_PROVIDER=smtp`: only SMTP
+- `EMAIL_PROVIDER=brevo`: only Brevo
+
+5) Troubleshooting
 - If you see `535` / `SMTPAuthenticationError`: verify `EMAIL_USER` and `EMAIL_PASS` (must be an App Password, not your normal Gmail password).
-- If Render logs show timeouts/hangs connecting to `smtp.gmail.com:587`, SMTP may be blocked or too slow. Set `SMTP_TIMEOUT` (default is 8s) to fail fast.
+- If SMTP times out/blocks (common on some hosts): keep `EMAIL_PROVIDER=auto` and configure Brevo/Resend so it can fall back.
 - Check recipient spam folder.
