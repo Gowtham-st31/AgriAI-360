@@ -1052,6 +1052,9 @@ def _send_otp_brevo(receiver_email: str, otp: str) -> bool:
     if not api_key or not from_email:
         raise RuntimeError('Brevo not configured: set BREVO_API_KEY and BREVO_FROM')
 
+    # Log high-level intent only (do not log OTP).
+    print(f"[OTP][brevo] sending to={receiver_email} from={from_email}")
+
     payload = {
         'sender': {
             'email': from_email,
@@ -1073,8 +1076,17 @@ def _send_otp_brevo(receiver_email: str, otp: str) -> bool:
     timeout = _http_timeout_seconds()
     resp = requests.post('https://api.brevo.com/v3/smtp/email', json=payload, headers=headers, timeout=timeout)
     if resp.status_code in (200, 201, 202):
+        print(f"[OTP][brevo] success status={resp.status_code}")
         return True
-    raise RuntimeError(f'Brevo send failed: HTTP {resp.status_code}: {resp.text}')
+
+    # Log response body for debugging on server logs only.
+    try:
+        body = (resp.text or '')
+        body = body[:8000]  # cap to keep logs sane
+    except Exception:
+        body = ''
+    print(f"[OTP][brevo] failed status={resp.status_code} body={body}")
+    raise RuntimeError(f'Brevo send failed (HTTP {resp.status_code})')
 
 
 def send_otp(receiver_email, otp):
@@ -1178,10 +1190,17 @@ def request_otp():
             # Do not leak sensitive details; give actionable hint.
             print(f"[OTP] send failed for {email}: {e}")
             provider = _email_provider()
+            if provider == 'brevo':
+                return jsonify({
+                    "success": False,
+                    "message": "Brevo OTP email failed",
+                    "hint": "Check BREVO_API_KEY, BREVO_FROM (verified sender), and Render outbound HTTPS access. See server logs for Brevo response."
+                }), 502
+
             return jsonify({
                 "success": False,
                 "message": "Failed to send OTP email",
-                "hint": "If SMTP is blocked/slow, keep EMAIL_PROVIDER=auto and set Brevo/Resend keys, or set EMAIL_PROVIDER=brevo/resend. Check server logs for details."
+                "hint": "Set EMAIL_PROVIDER=brevo and configure BREVO_API_KEY/BREVO_FROM. Check server logs for details."
             }), 502
 
     except Exception as e:
