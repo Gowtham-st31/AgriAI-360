@@ -1,65 +1,190 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Disease Detection</title>
-    <link rel="stylesheet" href="/styles.css">
-    <style>
-      .card{ max-width:1000px;margin:28px auto;padding:22px;background:var(--surface);border-radius:12px;box-shadow:var(--card-shadow)}
-      .btn { background:#12733a;color:#fff;padding:10px 14px;border-radius:8px;border:0;cursor:pointer }
-      img#preview{ display:block; width:100%; margin-top:12px; border-radius:8px; border:1px solid rgba(0,0,0,0.06)}
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgriAI-360 | Intelligent Crop Analysis</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script>tailwind.config={theme:{extend:{fontFamily:{sans:['Poppins','sans-serif']}}}}</script>
+  <style>
+    body{font-family:'Poppins',sans-serif!important}
+    .glass-panel{background:rgba(255,255,255,.03);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+    .gradient-text{background:linear-gradient(135deg,#34d399 0%,#3b82f6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .file-drop-area{transition:all .3s ease}.file-drop-area.dragover{background:rgba(16,185,129,.1)!important;border-color:#10b981!important;transform:scale(1.02)}
+    @keyframes blob{0%{transform:translate(0,0) scale(1)}33%{transform:translate(30px,-50px) scale(1.1)}66%{transform:translate(-20px,20px) scale(.9)}100%{transform:translate(0,0) scale(1)}}
+    .animate-blob{animation:blob 7s infinite}.animation-delay-2000{animation-delay:2s}.animation-delay-4000{animation-delay:4s}
+    @keyframes fadeInUp{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}.animate-fade-in{animation:fadeInUp .5s ease-out forwards}
+    #r_remedies li,#r_prevention li,#r_daily li{margin-top:5px}
+    #preview{object-fit:cover;width:100%;height:100%;position:absolute;top:0;left:0;border-radius:14px;display:none;z-index:10}
+  </style>
 </head>
-<body>
+<body class="bg-slate-900 min-h-screen text-slate-100 relative overflow-x-hidden flex flex-col">
 <script src="/theme.js"></script>
+
+<!-- Decorative blobs -->
+<div class="fixed top-0 left-10 w-96 h-96 bg-emerald-600 rounded-full mix-blend-screen filter blur-[128px] opacity-30 animate-blob pointer-events-none"></div>
+<div class="fixed top-0 right-10 w-96 h-96 bg-blue-600 rounded-full mix-blend-screen filter blur-[128px] opacity-30 animate-blob animation-delay-2000 pointer-events-none"></div>
+<div class="fixed -bottom-32 left-1/2 w-96 h-96 bg-purple-600 rounded-full mix-blend-screen filter blur-[128px] opacity-30 animate-blob animation-delay-4000 pointer-events-none"></div>
 
 <div id="site-header"></div>
 <script src="/header.js"></script>
 
-<div class="card">
-  <h2 style="text-align:center;color:#12733a" data-i18n="detect.title">🌱 Quick Diagnosis</h2>
-  <div id="modelBanner" style="display:none;margin-bottom:12px;padding:10px;border-radius:8px;background:#fff3cd;color:#856404;border:1px solid #ffeeba" data-i18n="detect.model">Model status</div>
+<!-- Model status banner — id="modelBanner" preserved -->
+<div id="modelBanner" style="display:none" class="fixed left-0 right-0 z-40 bg-amber-900/90 border-b border-amber-700/60 text-amber-200 text-sm font-medium px-4 py-2 text-center backdrop-blur-sm" style="top:68px"></div>
 
-  <div style="max-width:760px;margin:0 auto">
-    <input type="file" id="fileInput" accept="image/*" style="width:100%;padding:6px;border-radius:6px;border:1px solid #ddd">
-    <img id="preview" style="display:none">
-    <div style="display:flex;gap:12px;margin-top:12px;align-items:center">
-      <button id="detect-btn" class="btn" onclick="detectDisease()" data-i18n="detect.button">Detect Disease</button>
-      <a id="detect-back" href="/home" style="color:#12733a;text-decoration:none" data-i18n="detect.back">← Back to Home</a>
+<main class="flex-grow pt-28 pb-16 px-4 sm:px-6 lg:px-8 relative z-10 flex flex-col items-center justify-center">
+
+  <!-- Hero text -->
+  <div class="text-center max-w-3xl mx-auto mb-12 animate-fade-in">
+    <h1 class="text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight mb-5">
+      Next-Gen <span class="gradient-text">Crop Analysis</span>
+    </h1>
+    <p class="text-lg md:text-xl text-slate-400 font-light" data-i18n="detect.title">
+      Upload a plant leaf image to detect diseases and get AI-driven agricultural insights.
+    </p>
+  </div>
+
+  <!-- Main grid -->
+  <div class="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 gap-8">
+
+    <!-- LEFT: Upload panel -->
+    <div class="lg:col-span-5 flex flex-col animate-fade-in" style="animation-delay:.1s">
+      <div class="glass-panel rounded-3xl p-8 relative overflow-hidden group hover:shadow-2xl hover:shadow-emerald-500/10 transition-all duration-500 flex-1 flex flex-col">
+        <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-emerald-500/20 to-blue-500/20 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+        <h2 class="text-2xl font-semibold mb-2 text-white flex items-center gap-3">
+          <i class="fa-solid fa-cloud-arrow-up text-emerald-400"></i>Upload Image
+        </h2>
+        <p class="text-slate-400 text-sm mb-6">Supported formats: JPG, PNG, JPEG</p>
+
+        <div class="flex-grow flex flex-col">
+          <!-- Drop zone -->
+          <div class="flex-grow file-drop-area border-2 border-dashed border-slate-600 rounded-2xl flex flex-col items-center justify-center p-8 cursor-pointer relative overflow-hidden bg-slate-800/50 hover:bg-slate-800/80 transition-all"
+               id="drop-zone" onclick="document.getElementById('fileInput').click()" style="min-height:210px">
+
+            <!-- id="fileInput" preserved — original JS attaches onchange handler to this -->
+            <input type="file" id="fileInput" accept="image/*" class="hidden">
+            <!-- id="preview" preserved — original JS sets preview.src and display -->
+            <img id="preview" src="#" alt="Preview">
+
+            <div id="preview-overlay" style="display:none;position:absolute;inset:0;background:rgba(15,23,42,.6);z-index:20;border-radius:14px;backdrop-filter:blur(4px);align-items:center;justify-content:center;opacity:0;transition:opacity .2s"
+                 onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0'">
+              <span class="text-white font-medium bg-emerald-600/90 px-4 py-2 rounded-full shadow-lg text-sm">
+                <i class="fa-solid fa-pen mr-2"></i>Change Image
+              </span>
+            </div>
+
+            <div id="upload-placeholder" class="text-center z-0 flex flex-col items-center gap-3">
+              <div class="w-20 h-20 bg-slate-700/50 rounded-full flex items-center justify-center text-emerald-400 text-3xl group-hover:scale-110 transition-transform">
+                <i class="fa-regular fa-image"></i>
+              </div>
+              <span class="text-slate-300 font-medium text-lg">Drag &amp; drop your image here</span>
+              <span class="text-slate-500 text-sm">or click to browse from device</span>
+            </div>
+          </div>
+
+          <!-- id="detect-btn" preserved -->
+          <button id="detect-btn" onclick="detectDisease()"
+            class="mt-6 w-full py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-bold text-lg shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/50 hover:-translate-y-1 transition-all duration-300 flex items-center justify-center gap-2"
+            data-i18n="detect.button">
+            <i class="fa-solid fa-microchip" id="detect-btn-icon"></i>
+            <span id="detect-btn-text">Analyze Plant Health</span>
+          </button>
+          <a id="detect-back" href="/home" class="mt-3 text-center text-slate-500 hover:text-emerald-400 text-sm transition-colors" data-i18n="detect.back">← Back to Home</a>
+        </div>
+      </div>
     </div>
 
-    <div id="result" class="result-box" style="display:none;margin-top:16px">
-      <p><strong data-i18n="detect.disease">Disease:</strong> <span id="r_disease"></span></p>
-      <p><strong data-i18n="detect.description">Description:</strong> <span id="r_desc"></span></p>
-      <p><strong data-i18n="detect.remedies">Remedies:</strong></p>
-      <ul id="r_remedies"></ul>
-      <p><strong data-i18n="detect.prevention">Prevention:</strong></p>
-      <ul id="r_prevention"></ul>
-      <p><strong data-i18n="detect.daily">Daily Care Tips:</strong></p>
-      <ul id="r_daily"></ul>
-    </div>
+    <!-- RIGHT: Awaiting / Results -->
+    <div class="lg:col-span-7 flex flex-col gap-5 animate-fade-in" style="animation-delay:.2s">
 
-    <!-- Gemini Agent Chat Box -->
-    <div id="aiAgentBox" style="display:none;margin-top:20px;padding:16px;background:linear-gradient(135deg,#e8fff0 0%,#d4f5e0 100%);border-radius:12px;border:1px solid #2f8f46">
-      <h3 style="margin:0 0 12px 0;color:#12733a;display:flex;align-items:center;gap:8px">
-        <span style="font-size:1.3em">🤖</span>
+      <!-- Awaiting placeholder (hidden when result appears) -->
+      <div id="result-placeholder" class="glass-panel rounded-3xl p-12 flex-1 flex flex-col items-center justify-center text-center border border-dashed border-slate-700/50" style="min-height:360px">
+        <div class="relative w-24 h-24 bg-slate-800 rounded-full flex items-center justify-center mb-6">
+          <i class="fa-solid fa-robot text-4xl text-slate-500"></i>
+          <span class="absolute top-0 right-0 w-4 h-4 bg-emerald-500 rounded-full border-2 border-slate-900 animate-pulse"></span>
+        </div>
+        <h3 class="text-2xl font-semibold text-white mb-3">Awaiting Image</h3>
+        <p class="text-slate-400 max-w-md text-sm leading-relaxed">
+          Upload a photo of a plant leaf on the left. Our AI model will analyze it and provide instant disease classification and treatment recommendations.
+        </p>
+      </div>
+
+      <!-- id="result" preserved — original JS sets style.display='block' to show this -->
+      <div id="result" style="display:none" class="flex flex-col gap-5">
+        <!-- Disease name — id="r_disease" preserved -->
+        <div class="glass-panel rounded-3xl p-8 relative overflow-hidden border-l-4 border-emerald-500 shadow-xl shadow-emerald-900/20">
+          <div class="absolute -right-10 -top-10 text-9xl text-slate-700/20 pointer-events-none select-none"><i class="fa-solid fa-seedling"></i></div>
+          <p class="text-emerald-400 text-sm font-semibold uppercase tracking-wider flex items-center gap-2 mb-3">
+            <i class="fa-solid fa-circle-check"></i>Detection Result
+          </p>
+          <h2 id="r_disease" class="text-3xl font-bold text-white leading-tight capitalize"></h2>
+        </div>
+        <!-- Description — id="r_desc" preserved -->
+        <div class="glass-panel rounded-3xl p-6">
+          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">About</p>
+          <p id="r_desc" class="text-slate-300 text-sm leading-relaxed"></p>
+        </div>
+        <!-- Lists — all IDs preserved -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="glass-panel rounded-2xl p-5">
+            <p class="text-xs font-semibold text-emerald-400 uppercase tracking-wider flex items-center gap-2 mb-3"><i class="fa-solid fa-flask-vial fa-xs"></i>Remedies</p>
+            <ul id="r_remedies" class="text-slate-400 text-xs leading-relaxed list-disc pl-4 space-y-1"></ul>
+          </div>
+          <div class="glass-panel rounded-2xl p-5">
+            <p class="text-xs font-semibold text-blue-400 uppercase tracking-wider flex items-center gap-2 mb-3"><i class="fa-solid fa-shield-halved fa-xs"></i>Prevention</p>
+            <ul id="r_prevention" class="text-slate-400 text-xs leading-relaxed list-disc pl-4 space-y-1"></ul>
+          </div>
+          <div class="glass-panel rounded-2xl p-5">
+            <p class="text-xs font-semibold text-purple-400 uppercase tracking-wider flex items-center gap-2 mb-3"><i class="fa-solid fa-sun fa-xs"></i>Daily Care</p>
+            <ul id="r_daily" class="text-slate-400 text-xs leading-relaxed list-disc pl-4 space-y-1"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div><!-- /grid -->
+
+  <!-- AI Agent Box — id="aiAgentBox" preserved -->
+  <div id="aiAgentBox" style="display:none" class="w-full max-w-5xl mt-8 animate-fade-in">
+    <div class="glass-panel rounded-3xl p-8">
+      <h3 class="text-xl font-semibold text-white mb-2 flex items-center gap-3">
+        <i class="fa-solid fa-robot text-emerald-400"></i>
         <span data-i18n="detect.aiAgent">Ask AI Assistant</span>
       </h3>
-      <p style="color:#555;font-size:0.9em;margin-bottom:12px" data-i18n="detect.aiAgentDesc">Have questions about this disease? Ask our AI assistant for more details, treatment tips, or prevention advice.</p>
-      <div style="display:flex;gap:10px;align-items:stretch">
-        <input type="text" id="aiQuestion" placeholder="e.g., How often should I apply the treatment?" style="flex:1;padding:10px 12px;border-radius:8px;border:1px solid #ccc;font-size:15px" data-i18n="detect.aiPlaceholder">
-        <button id="aiAskBtn" class="btn" onclick="askAiAgent()" style="white-space:nowrap" data-i18n="detect.aiAsk">Ask AI</button>
+      <p class="text-slate-400 text-sm mb-5 leading-relaxed" data-i18n="detect.aiAgentDesc">Have questions about this disease? Ask our AI assistant for more details, treatment tips, or prevention advice.</p>
+      <div class="flex gap-3">
+        <input type="text" id="aiQuestion" placeholder="e.g., How often should I apply the treatment?" data-i18n="detect.aiPlaceholder"
+          class="flex-1 bg-slate-800/60 border border-slate-600 text-slate-100 placeholder-slate-500 rounded-xl px-4 py-3 text-sm outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition-all"
+          style="font-family:'Poppins',sans-serif">
+        <button id="aiAskBtn" onclick="askAiAgent()"
+          class="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5 transition-all whitespace-nowrap flex items-center gap-2"
+          data-i18n="detect.aiAsk">
+          <i class="fa-solid fa-paper-plane fa-sm"></i>Ask AI
+        </button>
       </div>
-      <div id="aiAnswer" style="display:none;margin-top:14px;padding:12px;background:#fff;border-radius:8px;border-left:4px solid #12733a">
-        <p style="margin:0;color:#333;line-height:1.6" id="aiAnswerText"></p>
+      <div id="aiLoading" style="display:none" class="mt-4 text-slate-400 text-sm flex items-center gap-2">
+        <i class="fa-solid fa-circle-notch fa-spin text-emerald-400"></i>
+        <span data-i18n="detect.aiLoading">Thinking...</span>
       </div>
-      <div id="aiLoading" style="display:none;margin-top:12px;color:#666">
-        <span>⏳</span> <span data-i18n="detect.aiLoading">Thinking...</span>
+      <div id="aiAnswer" style="display:none" class="mt-4 bg-slate-800/50 rounded-2xl p-5 border-l-4 border-emerald-500">
+        <p id="aiAnswerText" class="text-slate-300 text-sm leading-relaxed"></p>
       </div>
-      <div id="aiError" style="display:none;margin-top:12px;padding:10px;background:#fff3cd;border-radius:6px;color:#856404"></div>
+      <div id="aiError" style="display:none" class="mt-4 bg-red-900/20 border border-red-800/40 rounded-xl px-4 py-3 text-red-400 text-sm"></div>
     </div>
   </div>
-</div>
+
+</main>
+
+<footer class="border-t border-slate-800/60 bg-slate-900/50 backdrop-blur-md mt-auto py-6 relative z-10">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-4">
+    <p class="text-slate-500 text-sm">&copy; 2026 AgriAI-360. Empowering modern agriculture.</p>
+    <div class="flex gap-4">
+      <a href="#" class="text-slate-500 hover:text-emerald-400 transition-colors"><i class="fa-brands fa-github text-xl"></i></a>
+      <a href="#" class="text-slate-500 hover:text-blue-400 transition-colors"><i class="fa-brands fa-twitter text-xl"></i></a>
+    </div>
+  </div>
+</footer>
 
 <script>
 // Store current disease context for AI follow-up questions
@@ -333,6 +458,69 @@ document.addEventListener('DOMContentLoaded', function(){
 });
 
 (async function(){ try{ const r = await fetch('/model/status'); const j = await r.json(); const b = document.getElementById('modelBanner'); if(b){ if(!j.loaded){ b.style.display='block'; b.innerText = 'Model not loaded: ' + (j.message||'using fallback'); } else { b.style.display='none' } } }catch(e){ const b=document.getElementById('modelBanner'); if(b){ b.style.display='block'; b.innerText='Could not check model status.' } } })();
+</script>
+
+<!-- UI enhancements: drag/drop, overlay, placeholder toggle, loading state -->
+<script>
+(function(){
+  var dz = document.getElementById('drop-zone');
+  var fi = document.getElementById('fileInput');
+  var overlay = document.getElementById('preview-overlay');
+  var ph = document.getElementById('upload-placeholder');
+
+  // Drag and drop
+  ['dragenter','dragover','dragleave','drop'].forEach(function(ev){
+    dz.addEventListener(ev, function(e){ e.preventDefault(); e.stopPropagation(); });
+  });
+  ['dragenter','dragover'].forEach(function(ev){ dz.addEventListener(ev, function(){ dz.classList.add('dragover'); }); });
+  ['dragleave','drop'].forEach(function(ev){ dz.addEventListener(ev, function(){ dz.classList.remove('dragover'); }); });
+  dz.addEventListener('drop', function(e){
+    var files = e.dataTransfer.files;
+    if(files.length){ fi.files = files; showPreviewUI(files[0]); }
+  });
+  fi.addEventListener('change', function(){
+    if(fi.files.length) showPreviewUI(fi.files[0]);
+  });
+
+  function showPreviewUI(file){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      var prev = document.getElementById('preview');
+      prev.src = e.target.result;
+      prev.style.display = 'block';
+      overlay.style.display = 'flex';
+      ph.style.opacity = '0';
+      ph.style.pointerEvents = 'none';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // Hide awaiting placeholder when result becomes visible
+  var resultEl = document.getElementById('result');
+  var resultPh = document.getElementById('result-placeholder');
+  if(resultEl && resultPh){
+    new MutationObserver(function(){
+      if(resultEl.style.display && resultEl.style.display !== 'none'){ resultPh.style.display = 'none'; }
+    }).observe(resultEl, {attributes:true, attributeFilter:['style']});
+  }
+
+  // Detect button loading state
+  var origDetect = window.detectDisease;
+  window.detectDisease = async function(){
+    var btn = document.getElementById('detect-btn');
+    var txt = document.getElementById('detect-btn-text');
+    var ico = document.getElementById('detect-btn-icon');
+    if(btn){ btn.disabled=true; btn.style.opacity='.75'; btn.style.cursor='default'; }
+    if(ico) ico.className='fa-solid fa-circle-notch fa-spin';
+    if(txt) txt.textContent='Analyzing...';
+    try{ await origDetect(); }
+    finally{
+      if(btn){ btn.disabled=false; btn.style.opacity=''; btn.style.cursor=''; }
+      if(ico) ico.className='fa-solid fa-microchip';
+      if(txt) txt.textContent='Analyze Plant Health';
+    }
+  };
+})();
 </script>
 
 </body>

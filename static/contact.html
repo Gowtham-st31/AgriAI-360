@@ -1,27 +1,53 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Contact</title>
-    <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AgriAI-360 | Contact</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body{font-family:'Poppins',sans-serif!important}
+    .glass-panel{background:rgba(255,255,255,.03);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+    .gradient-text{background:linear-gradient(135deg,#34d399 0%,#3b82f6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  </style>
 </head>
-<body>
+<body class="bg-slate-900 min-h-screen text-slate-100">
+
 <script src="/theme.js"></script>
-
-<div class="navbar">📞 Contact</div>
-
-<div class="page-box">
-    <h2>Contact Us</h2>
-
-    <p>📧 Email: agriai360@gmail.com</p>
-    <p>📞 Phone: +91 98765 43210</p>
-    <p>🌍 Address: Coimbatore, Tamil Nadu</p>
-
-</div>
-
-<body>
-
 <div id="site-header"></div>
 <script src="/header.js"></script>
 
-<div class="page-box contact-box">
+<main class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+  <div class="mb-6">
+    <h1 class="text-3xl font-extrabold text-white tracking-tight"><i class="fa-solid fa-headset mr-2 text-emerald-400"></i>Contact <span class="gradient-text">Us</span></h1>
+    <p class="mt-1 text-slate-400 text-sm">We'd love to hear from you. Reach out anytime.</p>
+  </div>
+
+  <div class="glass-panel rounded-3xl p-6 sm:p-8 space-y-5">
+    <div class="flex items-center gap-4">
+      <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500/20 to-emerald-500/5 flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-envelope text-emerald-400"></i></div>
+      <div>
+        <div class="text-xs text-slate-500 font-medium uppercase tracking-wider">Email</div>
+        <a href="mailto:agriai360@gmail.com" class="text-slate-200 font-medium hover:text-emerald-400 transition-colors">agriai360@gmail.com</a>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500/20 to-blue-500/5 flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-phone text-blue-400"></i></div>
+      <div>
+        <div class="text-xs text-slate-500 font-medium uppercase tracking-wider">Phone</div>
+        <span class="text-slate-200 font-medium">+91 98765 43210</span>
+      </div>
+    </div>
+    <div class="flex items-center gap-4">
+      <div class="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500/20 to-amber-500/5 flex items-center justify-center flex-shrink-0"><i class="fa-solid fa-location-dot text-amber-400"></i></div>
+      <div>
+        <div class="text-xs text-slate-500 font-medium uppercase tracking-wider">Address</div>
+        <span class="text-slate-200 font-medium">Coimbatore, Tamil Nadu, India</span>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

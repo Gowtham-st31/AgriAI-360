@@ -1,48 +1,89 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Admin Dashboard</title>
-    <link rel="stylesheet" href="/admin.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgriAI-360 | Admin Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body{font-family:'Poppins',sans-serif!important}
+    .glass-panel{background:rgba(255,255,255,.03);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+    .gradient-text{background:linear-gradient(135deg,#34d399 0%,#3b82f6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .agri-input{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;transition:border-color .2s,box-shadow .2s}
+    .agri-input:focus{outline:none;border-color:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.15)}
+    .agri-input::placeholder{color:rgba(255,255,255,.3)}
+    .nav-card{transition:all .2s}
+    .nav-card:hover{transform:translateY(-2px);border-color:rgba(16,185,129,.4)!important;box-shadow:0 8px 30px rgba(16,185,129,.1)}
+  </style>
 </head>
+<body class="bg-slate-900 min-h-screen text-slate-100">
 
-<body>
-<script src="/theme.js"></script>
+<div id="admin-nav-placeholder"></div>
+<script src="/admin-header.js"></script>
 
-<div class="navbar">Admin Dashboard</div>
+<main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+  <div class="mb-8">
+    <h1 class="text-3xl font-extrabold text-white tracking-tight">Admin <span class="gradient-text">Dashboard</span></h1>
+    <p class="mt-1 text-slate-400 text-sm">Manage marketplace data, orders, and featured deals.</p>
+  </div>
 
-<div class="container">
+  <!-- Nav cards -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 mb-8">
+    <a href="/admin/orders" class="glass-panel nav-card rounded-2xl p-5 flex flex-col items-center gap-3 text-center no-underline">
+      <div class="w-11 h-11 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-400 text-xl"><i class="fa-solid fa-receipt"></i></div>
+      <span class="text-sm font-semibold text-slate-200">Orders</span>
+    </a>
+    <a href="/admin/products" class="glass-panel nav-card rounded-2xl p-5 flex flex-col items-center gap-3 text-center no-underline">
+      <div class="w-11 h-11 rounded-xl bg-blue-500/15 flex items-center justify-center text-blue-400 text-xl"><i class="fa-solid fa-box"></i></div>
+      <span class="text-sm font-semibold text-slate-200">Products</span>
+    </a>
+    <a href="/admin/commodities" class="glass-panel nav-card rounded-2xl p-5 flex flex-col items-center gap-3 text-center no-underline">
+      <div class="w-11 h-11 rounded-xl bg-purple-500/15 flex items-center justify-center text-purple-400 text-xl"><i class="fa-solid fa-layer-group"></i></div>
+      <span class="text-sm font-semibold text-slate-200">Commodities</span>
+    </a>
+    <a href="/admin/diseases" class="glass-panel nav-card rounded-2xl p-5 flex flex-col items-center gap-3 text-center no-underline">
+      <div class="w-11 h-11 rounded-xl bg-amber-500/15 flex items-center justify-center text-amber-400 text-xl"><i class="fa-solid fa-stethoscope"></i></div>
+      <span class="text-sm font-semibold text-slate-200">Diseases</span>
+    </a>
+    <a href="/admin/analytics" class="glass-panel nav-card rounded-2xl p-5 flex flex-col items-center gap-3 text-center no-underline">
+      <div class="w-11 h-11 rounded-xl bg-rose-500/15 flex items-center justify-center text-rose-400 text-xl"><i class="fa-solid fa-chart-bar"></i></div>
+      <span class="text-sm font-semibold text-slate-200">Analytics</span>
+    </a>
+  </div>
 
-        <div class="page-box">
-            <h1 style="text-align:center;margin:6px 0 18px">Admin Dashboard</h1>
-            <div class="card-grid">
-                <a href="/admin/orders" class="card">Manage Orders</a>
-                <a href="/admin/products" class="card">Manage Products</a>
-                <a href="/admin/commodities" class="card">Manage Commodities</a>
-                <a href="/admin/diseases" class="card">Manage Diseases</a>
-                <a href="/admin/analytics" class="card">Analytics</a>
-            </div>
+  <!-- Today's Deals Manager -->
+  <div class="glass-panel rounded-3xl p-8">
+    <h2 class="text-xl font-semibold text-white flex items-center gap-3 mb-1">
+      <i class="fa-solid fa-fire text-amber-400"></i> Today's Deals
+    </h2>
+    <p class="text-slate-400 text-sm mb-6">Add or remove listings featured on the home page.</p>
 
-            <div style="text-align:center;margin-top:18px">
-                <a href="/admin/logout" class="card logout" style="display:inline-block;min-width:160px">Logout</a>
-            </div>
-        </div>
+    <div class="flex gap-3 mb-6">
+      <input id="deal_id" placeholder="Listing ID (e.g. 1764399303396)" class="agri-input flex-1 px-4 py-3 rounded-xl text-sm font-['Poppins']">
+      <button id="add_deal" class="px-5 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5 transition-all flex items-center gap-2 whitespace-nowrap">
+        <i class="fa-solid fa-plus fa-sm"></i> Add Deal
+      </button>
+    </div>
 
-        <div class="page-box" style="margin-top:18px">
-            <h2>Today's Deals Manager</h2>
-            <p class="muted">Add or remove listings to be featured in Today's Deals.</p>
-            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-                <input id="deal_id" placeholder="Listing ID (e.g. 1764399303396)" style="padding:8px;border-radius:6px;border:1px solid #ccc;flex:1" />
-                <button id="add_deal" class="btn-main">Add</button>
-            </div>
-            <div id="deals_list" style="margin-top:12px">
-                <div class="muted">Loading deals…</div>
-            </div>
-        </div>
+    <div id="deals_list">
+      <div class="text-slate-500 text-sm italic">Loading deals…</div>
+    </div>
+  </div>
 
-</div>
-
-</body>
-</html>
+  <!-- Pending Listings Approval -->
+  <div class="glass-panel rounded-3xl p-8 mt-6">
+    <h2 class="text-xl font-semibold text-white flex items-center gap-3 mb-1">
+      <i class="fa-solid fa-clock text-orange-400"></i> Pending Listings
+      <span id="pending_badge" class="inline-flex items-center justify-center min-w-[22px] h-[22px] rounded-full bg-orange-500/20 text-orange-400 text-xs font-bold px-1.5">0</span>
+    </h2>
+    <p class="text-slate-400 text-sm mb-6">Review and approve seller listings before they appear on the marketplace.</p>
+    <div id="pending_list">
+      <div class="text-slate-500 text-sm italic">Loading…</div>
+    </div>
+  </div>
+</main>
 
 <script>
 async function refreshDeals(){
@@ -50,22 +91,25 @@ async function refreshDeals(){
     try{
         const r = await fetch('/admin/api/today_deals', {credentials:'include'});
         if(r.status === 401 || r.status === 403){
-            box.innerHTML = '<div class="muted">Admin login required. <a href="/admin_login.html">Login as admin</a></div>';
+            box.innerHTML = '<div class="text-slate-500 text-sm">Session expired. <a href="/admin/login" class="text-emerald-400 hover:underline">Login</a></div>';
             return;
         }
         const j = await r.json();
-        if(!j.success){ box.innerHTML = '<div class="muted">Failed to load: '+(j.message||'')+'</div>'; return }
+        if(!j.success){ box.innerHTML = '<div class="text-slate-500 text-sm">Failed to load: '+(j.message||'')+'</div>'; return }
         const ids = j.ids || [];
         const items = j.items || [];
-        if(ids.length===0){ box.innerHTML = '<div class="muted">No marked deals.</div>'; return }
-        box.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px">' + ids.map(id=>{
+        if(ids.length===0){ box.innerHTML = '<div class="text-slate-500 text-sm italic">No deals marked yet.</div>'; return }
+        box.innerHTML = '<div class="flex flex-col gap-3">' + ids.map(id=>{
             const it = (items||[]).find(x=>x.id==id) || {};
-            return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;border:1px solid #eee;border-radius:6px">
-                <div><strong>${it.product||'ID '+id}</strong><div class="muted">${it.quantity||''} kg • ₹${it.price||''}</div></div>
-                <div><button class="btn" onclick="removeDeal(${id})">Remove</button></div>
+            return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)">
+                <div>
+                  <div style="font-weight:600;color:#e2e8f0;font-size:14px">${it.product||'ID '+id}</div>
+                  <div style="font-size:12px;color:#64748b;margin-top:2px">${it.quantity||''} kg • ₹${it.price||''}</div>
+                </div>
+                <button onclick="removeDeal(${id})" style="padding:6px 14px;border-radius:8px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.25);color:#f87171;font-size:12px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;white-space:nowrap"><i class="fa-solid fa-trash fa-xs"></i> Remove</button>
             </div>`;
         }).join('') + '</div>';
-    }catch(e){ box.innerHTML = '<div class="muted">Could not load deals. Is the server running?</div>' }
+    }catch(e){ box.innerHTML = '<div class="text-slate-500 text-sm">Could not load deals.</div>' }
 }
 
 async function addDeal(){
@@ -88,4 +132,48 @@ async function removeDeal(id){
 
 document.getElementById('add_deal').addEventListener('click', addDeal);
 refreshDeals();
+
+// Pending Listings Approval
+async function refreshPending(){
+    const box = document.getElementById('pending_list');
+    try{
+        const r = await fetch('/admin/api/pending_listings', {credentials:'include'});
+        const j = await r.json();
+        if(!j.success){ box.innerHTML = '<div class="text-slate-500 text-sm">Failed to load.</div>'; return }
+        const items = j.listings || [];
+        const badge = document.getElementById('pending_badge');
+        if(badge) badge.textContent = items.length;
+        if(items.length===0){ box.innerHTML = '<div class="text-slate-500 text-sm italic">No pending listings.</div>'; return }
+        box.innerHTML = '<div class="flex flex-col gap-3">' + items.map(it=>{
+            return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)">
+                <div style="flex:1">
+                  <div style="font-weight:600;color:#e2e8f0;font-size:14px">${it.product||'Unknown'}</div>
+                  <div style="font-size:12px;color:#64748b;margin-top:2px">${it.quantity||''} kg &bull; ₹${it.price||''} &bull; By: ${it.user||'anon'}</div>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button onclick="approveListing(${it.id})" style="padding:6px 14px;border-radius:8px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.3);color:#34d399;font-size:12px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;white-space:nowrap"><i class="fa-solid fa-check fa-xs"></i> Approve</button>
+                  <button onclick="rejectListing(${it.id})" style="padding:6px 14px;border-radius:8px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.25);color:#f87171;font-size:12px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;white-space:nowrap"><i class="fa-solid fa-xmark fa-xs"></i> Reject</button>
+                </div>
+            </div>`;
+        }).join('') + '</div>';
+    }catch(e){ box.innerHTML = '<div class="text-slate-500 text-sm">Could not load pending listings.</div>' }
+}
+async function approveListing(id){
+    try{
+        const r = await fetch('/admin/api/listing/'+id+'/approve', {method:'POST', credentials:'include'});
+        const j = await r.json();
+        if(j.success) refreshPending(); else alert('Failed: '+(j.message||''));
+    }catch(e){ alert('Request failed') }
+}
+async function rejectListing(id){
+    if(!confirm('Reject and remove this listing?')) return;
+    try{
+        const r = await fetch('/admin/api/listing/'+id+'/reject', {method:'POST', credentials:'include'});
+        const j = await r.json();
+        if(j.success) refreshPending(); else alert('Failed: '+(j.message||''));
+    }catch(e){ alert('Request failed') }
+}
+refreshPending();
 </script>
+</body>
+</html>

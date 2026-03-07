@@ -2,96 +2,132 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Agri360 - Home</title>
-    <link rel="stylesheet" href="/styles.css">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: { extend: { fontFamily: { sans: ['Poppins','sans-serif'] } } }
+        };
+    </script>
     <style>
-        /* Home-specific dark theme + colorful hero */
-        .hero { background: linear-gradient(120deg, #06202a 0%, #063b2f 45%, #0b2e3b 100%); padding:64px 20px; color: #fff; border-radius:12px }
-        .hero h1{ font-size:48px; margin:0 0 12px; font-weight:900; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,0.6) }
-        .hero p{ max-width:820px; font-size:16px; opacity:0.95 }
-        .cta-card{ max-width:960px; margin:-40px auto 48px; padding:28px; background:var(--surface); border-radius:12px; box-shadow:var(--card-shadow); }
-        .cta-btn{ background:var(--accent); color:var(--primary-contrast); padding:14px 20px; border-radius:8px; border:0; font-size:16px; cursor:pointer }
-
-        /* Dark-mode variable overrides when body has class 'dark-mode' */
-        body.dark-mode{
-            --bg: #071016;
-            --surface: #0f1720;
-            --primary: #06121a;
-            --primary-contrast: #ffffff;
-            --accent: #ff8f00;
-            --muted: #a3b1af;
-            --card-shadow: 0 8px 26px rgba(0,0,0,0.6);
-            background: var(--bg);
-            color: #e6f6ea;
-        }
-
-        /* Slightly brighter product cards on dark bg */
-        .product-card{ background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.06)); border: 1px solid rgba(255,255,255,0.02); }
-        .product-title{ color: var(--text) }
-        .product-meta{ color: var(--muted) }
-        .product-price{ color: var(--accent) }
+        body { background:#0f172a; color:#e2e8f0; font-family:'Poppins',sans-serif; }
+        .glass-panel { background:rgba(255,255,255,.03); border:1px solid rgba(255,255,255,.07); backdrop-filter:blur(12px); border-radius:16px; }
+        .gradient-text { background:linear-gradient(135deg,#10b981,#3b82f6); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+        @keyframes blob { 0%,100%{transform:translate(0,0) scale(1)} 33%{transform:translate(30px,-50px) scale(1.1)} 66%{transform:translate(-20px,20px) scale(.9)} }
+        .animate-blob { animation:blob 7s infinite; }
+        .delay-2000 { animation-delay:2s; }
+        .delay-4000 { animation-delay:4s; }
+        /* Carousel */
+        #slidesContainer { display:flex; transition:transform .5s ease; }
+        #slidesContainer .slide { min-width:100%; display:flex; align-items:center; gap:24px; }
+        .dot-btn { width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,.2);border:0;cursor:pointer;transition:background .3s; }
+        .dot-btn.active { background:#10b981; }
+        /* Product cards */
+        .product-card { background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.07); border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:8px; transition:transform .2s,border-color .2s; }
+        .product-card:hover { transform:translateY(-2px); border-color:rgba(16,185,129,.35); }
+        .product-card img { width:100%;height:100px;object-fit:cover;border-radius:10px;background:#1e293b; }
+        .product-title { font-weight:600; font-size:.95rem; color:#f1f5f9; }
+        .product-meta { font-size:.78rem; color:#94a3b8; }
+        .product-price { font-size:1rem; font-weight:700; color:#10b981; }
+        .product-actions { display:flex;gap:8px;margin-top:4px; }
+        .btn-main { background:linear-gradient(135deg,#10b981,#3b82f6); color:#fff; border:0; border-radius:8px; padding:8px 14px; font-size:.82rem; font-weight:600; cursor:pointer; transition:opacity .2s; }
+        .btn-main:hover { opacity:.85; }
+        .btn { background:rgba(255,255,255,.07); color:#e2e8f0; border:1px solid rgba(255,255,255,.1); border-radius:8px; padding:8px 14px; font-size:.82rem; font-weight:500; cursor:pointer; transition:background .2s; }
+        .btn:hover { background:rgba(255,255,255,.12); }
+        .muted { color:#64748b; font-size:.85rem; }
+        .active-cat { color:#10b981!important; background:rgba(16,185,129,.12)!important; }
+        /* Category list */
+        .category-list a { display:block;padding:8px 12px;border-radius:8px;color:#cbd5e1;font-size:.88rem;text-decoration:none;transition:background .2s,color .2s; }
+        .category-list a:hover { background:rgba(16,185,129,.1); color:#10b981; }
     </style>
 </head>
-<body class="dark-mode">
-<script src="/theme.js"></script>
+<body class="min-h-screen">
+
+<!-- Decorative blobs -->
+<div class="fixed top-0 left-0 w-96 h-96 rounded-full opacity-10 blur-3xl pointer-events-none animate-blob" style="background:radial-gradient(circle,#10b981,transparent)"></div>
+<div class="fixed top-0 right-0 w-96 h-96 rounded-full opacity-10 blur-3xl pointer-events-none animate-blob delay-2000" style="background:radial-gradient(circle,#3b82f6,transparent)"></div>
+<div class="fixed bottom-0 left-1/2 w-96 h-96 rounded-full opacity-10 blur-3xl pointer-events-none animate-blob delay-4000" style="background:radial-gradient(circle,#8b5cf6,transparent)"></div>
 
 <div id="site-header"></div>
 <script src="/header.js"></script>
 
-<div class="layout">
-    <aside class="sidebar">
-        <h3 data-i18n="sidebar.categories">Shop by Category</h3>
-        <div class="category-list">
-            <a href="/market?q=fruits" data-cat="fruits" data-i18n="cat.fruits">Fruits</a>
-            <a href="/market?q=vegetables" data-cat="vegetables" data-i18n="cat.vegetables">Vegetables</a>
-            <a href="/market?q=grains" data-cat="grains" data-i18n="cat.grains">Grains</a>
-            <a href="/market?q=seeds" data-cat="seeds" data-i18n="cat.seeds">Seeds</a>
-        </div>
+<div class="max-w-screen-xl mx-auto px-4 pt-8 pb-16 flex gap-6">
 
-        <hr style="margin:12px 0">
-        <h3 data-i18n="sidebar.trending">Trending</h3>
-        <div class="muted" data-i18n="home.trending.list">Tomato • Onion • Banana • Maize</div>
+    <!-- Sidebar -->
+    <aside class="hidden lg:block w-56 flex-shrink-0">
+        <div class="glass-panel p-5 sticky top-24">
+            <h3 class="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-3" data-i18n="sidebar.categories"><i class="fa-solid fa-list-ul mr-2"></i>Categories</h3>
+            <div class="category-list flex flex-col gap-1">
+                <a href="/market?q=fruits" data-cat="fruits" data-i18n="cat.fruits"><i class="fa-solid fa-apple-whole w-5 mr-1 text-emerald-400"></i>Fruits</a>
+                <a href="/market?q=vegetables" data-cat="vegetables" data-i18n="cat.vegetables"><i class="fa-solid fa-carrot w-5 mr-1 text-emerald-400"></i>Vegetables</a>
+                <a href="/market?q=grains" data-cat="grains" data-i18n="cat.grains"><i class="fa-solid fa-wheat-awn w-5 mr-1 text-emerald-400"></i>Grains</a>
+                <a href="/market?q=seeds" data-cat="seeds" data-i18n="cat.seeds"><i class="fa-solid fa-seedling w-5 mr-1 text-emerald-400"></i>Seeds</a>
+            </div>
+            <hr class="border-white/10 my-4">
+            <h3 class="text-sm font-semibold text-blue-400 uppercase tracking-wider mb-2" data-i18n="sidebar.trending"><i class="fa-solid fa-fire mr-2"></i>Trending</h3>
+            <p class="text-slate-400 text-xs leading-relaxed" data-i18n="home.trending.list">Tomato • Onion • Banana • Maize</p>
+        </div>
     </aside>
 
-    <main class="main-column">
-        <div class="carousel section-row" id="heroCarousel">
-            <div class="slides" id="slidesContainer">
-                <div class="slide">
-                    <div style="flex:1">
-                        <h2 style="margin:0" data-i18n="home.hero.title">Fresh produce, direct from farmers</h2>
-                        <p class="muted" data-i18n="home.hero.desc">Quality listings, daily deals and trusted sellers in your region.</p>
-                        <div style="margin-top:12px;display:flex;gap:12px;align-items:center">
-                            <a href="/market"><button class="btn-main" style="width:auto;padding:10px 14px" data-i18n="home.cta.shop">Shop Today's Deals</button></a>
-                            <a href="/buy.html"><button class="btn" style="width:auto;padding:10px 14px" data-i18n="home.cta.buyer">I'm a Buyer</button></a>
-                            <a href="/sell.html"><button class="btn-main" style="width:auto;padding:10px 14px;background:var(--primary);color:var(--primary-contrast)" data-i18n="home.cta.seller">I'm a Seller</button></a>
-                            <a href="/cart"><button class="btn" style="width:auto;padding:10px 14px;background:var(--accent);color:#000;font-weight:800" data-i18n="home.cta.cart">View Cart</button></a>
+    <!-- Main column -->
+    <main class="flex-1 min-w-0 flex flex-col gap-8">
+
+        <!-- Carousel -->
+        <div class="glass-panel overflow-hidden relative" id="heroCarousel">
+            <div id="slidesContainer">
+                <div class="slide p-8">
+                    <div class="flex-1">
+                        <h2 class="text-2xl font-bold text-white mb-2" data-i18n="home.hero.title">Fresh produce, direct from farmers</h2>
+                        <p class="text-slate-400 text-sm mb-5" data-i18n="home.hero.desc">Quality listings, daily deals and trusted sellers in your region.</p>
+                        <div class="flex flex-wrap gap-3">
+                            <a href="/market"><button class="btn-main" data-i18n="home.cta.shop">Shop Today's Deals</button></a>
+                            <a href="/buy.html"><button class="btn" data-i18n="home.cta.buyer">I'm a Buyer</button></a>
+                            <a href="/sell.html"><button class="btn-main" data-i18n="home.cta.seller">I'm a Seller</button></a>
+                            <a href="/cart"><button class="btn" style="background:rgba(16,185,129,.15);color:#10b981;border-color:rgba(16,185,129,.3)" data-i18n="home.cta.cart">View Cart</button></a>
                         </div>
                     </div>
-                    <div style="width:320px;text-align:right"><img src="/icons/hero-fruits.jpg" onerror="this.src='/icons/market.png'" alt="hero"></div>
+                    <div class="hidden md:block flex-shrink-0"><img src="/icons/hero-fruits.jpg" onerror="this.src='/icons/market.png'" alt="hero" class="h-36 w-44 object-cover rounded-xl opacity-80"></div>
                 </div>
-                <div class="slide">
-                    <div style="flex:1">
-                        <h2 style="margin:0" data-i18n="home.detect.title">Upload & detect plant diseases</h2>
-                        <p class="muted" data-i18n="home.detect.desc">AI-assisted diagnosis and simple care instructions.</p>
-                        <div style="margin-top:12px"><a href="/detect"><button class="btn-main btn-accent" style="width:auto;padding:10px 14px" data-i18n="home.detect.cta">Quick Diagnose</button></a></div>
+                <div class="slide p-8">
+                    <div class="flex-1">
+                        <h2 class="text-2xl font-bold text-white mb-2" data-i18n="home.detect.title">Upload &amp; detect plant diseases</h2>
+                        <p class="text-slate-400 text-sm mb-5" data-i18n="home.detect.desc">AI-assisted diagnosis and simple care instructions.</p>
+                        <a href="/detect"><button class="btn-main" data-i18n="home.detect.cta"><i class="fa-solid fa-magnifying-glass-plus mr-2"></i>Quick Diagnose</button></a>
                     </div>
-                    <div style="width:320px;text-align:right"><img src="/icons/hero-detect.jpg" onerror="this.src='/icons/market.png'" alt="detect"></div>
+                    <div class="hidden md:block flex-shrink-0"><img src="/icons/hero-detect.jpg" onerror="this.src='/icons/market.png'" alt="detect" class="h-36 w-44 object-cover rounded-xl opacity-80"></div>
                 </div>
             </div>
-            <div class="dots" id="carouselDots"></div>
+            <div class="flex justify-center gap-2 pb-5" id="carouselDots"></div>
         </div>
 
-        <section class="section-row">
-            <div class="section-title"><h3 style="margin:0" data-i18n="home.deals.title">Today's Deals</h3><a href="/market" class="muted" data-i18n="home.deals.see_all">See all</a></div>
-            <div class="grid" id="dealsGrid"></div>
+        <!-- Today's Deals -->
+        <section>
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-base font-semibold text-white" data-i18n="home.deals.title"><i class="fa-solid fa-tags mr-2 text-emerald-400"></i>Today's Deals</h3>
+                <a href="/market" class="text-xs text-emerald-400 hover:text-emerald-300 transition-colors" data-i18n="home.deals.see_all">See all →</a>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4" id="dealsGrid"></div>
         </section>
 
-        <section class="section-row">
-            <div class="section-title"><h3 style="margin:0" data-i18n="home.recommended.title">Recommended for you</h3><a href="/market" class="muted" data-i18n="home.recommended.browse">Browse</a></div>
-            <div class="grid" id="recommendGrid"></div>
+        <!-- Recommended -->
+        <section>
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-base font-semibold text-white" data-i18n="home.recommended.title"><i class="fa-solid fa-star mr-2 text-blue-400"></i>Recommended for you</h3>
+                <a href="/market" class="text-xs text-blue-400 hover:text-blue-300 transition-colors" data-i18n="home.recommended.browse">Browse →</a>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4" id="recommendGrid"></div>
         </section>
+
     </main>
 </div>
+
+<!-- Footer -->
+<footer class="text-center text-slate-600 text-xs py-8 border-t border-white/5">
+    <i class="fa-solid fa-leaf text-emerald-700 mr-1"></i> Agri360 &copy; 2024
+</footer>
 
 <script>
 // Simple carousel
@@ -100,8 +136,8 @@
     const dots = document.getElementById('carouselDots');
     let idx=0;
     const total = slides.children.length;
-    function renderDots(){ dots.innerHTML=''; for(let i=0;i<total;i++){ const d=document.createElement('div'); d.className='dot'+(i===0?' active':''); d.addEventListener('click', ()=>{ idx=i; update() }); dots.appendChild(d) } }
-    function update(){ slides.style.transform = 'translateX('+(-idx*100)+'%)'; Array.from(dots.children).forEach((d,i)=>d.className='dot'+(i===idx?' active':'')) }
+    function renderDots(){ dots.innerHTML=''; for(let i=0;i<total;i++){ const d=document.createElement('button'); d.className='dot-btn'+(i===0?' active':''); d.addEventListener('click', ()=>{ idx=i; update() }); dots.appendChild(d) } }
+    function update(){ slides.style.transform = 'translateX('+(-idx*100)+'%)'; Array.from(dots.children).forEach((d,i)=>d.className='dot-btn'+(i===idx?' active':'')) }
     renderDots(); setInterval(()=>{ idx = (idx+1)%total; update() }, 4500);
 })();
 
@@ -118,7 +154,7 @@ function renderItems(targetEl, items){
             const meta = document.createElement('div'); meta.className='product-meta'; meta.textContent = (it.quantity||'') + ' kg • ' + (it.seller||'seller');
             const price = document.createElement('div'); price.className='product-price'; price.textContent = '₹' + it.price;
             const actions = document.createElement('div'); actions.className = 'product-actions';
-            const buyBtn = document.createElement('button'); buyBtn.className='btn-main'; buyBtn.textContent='Use'; buyBtn.addEventListener('click', ()=>{ try{ window.addToCart(it, true) }catch(e){ window.location.href='/buy.html' } });
+            const buyBtn = document.createElement('button'); buyBtn.className='btn-main'; buyBtn.textContent='Add To Cart'; buyBtn.addEventListener('click', ()=>{ try{ window.addToCart(it, true) }catch(e){ window.location.href='/buy.html' } });
             const contactBtn = document.createElement('button'); contactBtn.className='btn'; contactBtn.textContent='Contact'; contactBtn.addEventListener('click', ()=>{ try{ window.contactSeller(it.seller, it) }catch(e){ window.location.href='/sell.html' } });
             actions.appendChild(buyBtn); actions.appendChild(contactBtn);
             card.appendChild(img); card.appendChild(title); card.appendChild(meta); card.appendChild(price); card.appendChild(actions);
@@ -188,15 +224,15 @@ loadGrid(document.getElementById('recommendGrid'));
 </script>
 
 <!-- Floating cart quick access -->
-<div id="floating-cart" style="position:fixed;right:18px;bottom:18px;background:var(--accent);color:#000;padding:10px 12px;border-radius:999px;box-shadow:0 8px 20px rgba(0,0,0,0.12);z-index:999;display:flex;gap:8px;align-items:center;cursor:pointer"> 
-    <span style="font-weight:800">Cart</span>
-    <span id="floating-cart-count" style="background:#000;color:var(--accent);padding:2px 8px;border-radius:12px;font-weight:800">0</span>
+<div id="floating-cart" style="position:fixed;right:22px;bottom:22px;background:linear-gradient(135deg,#10b981,#3b82f6);color:#fff;padding:11px 18px;border-radius:999px;box-shadow:0 8px 24px rgba(16,185,129,.35);z-index:999;display:flex;gap:8px;align-items:center;cursor:pointer;font-family:Poppins,sans-serif;font-weight:600;font-size:.9rem">
+    <i class="fa-solid fa-cart-shopping"></i>
+    <span id="floating-cart-count" style="background:rgba(0,0,0,.25);color:#fff;padding:2px 9px;border-radius:12px;font-size:.82rem;font-weight:700">0</span>
 </div>
 
 <!-- Inline language FAB: always visible on home page -->
-<div id="home-lang-fab" style="position:fixed;right:18px;top:18px;z-index:1600;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-    <button id="home-lang-btn" style="background:var(--accent);color:var(--primary-contrast);padding:10px 12px;border-radius:999px;border:0;cursor:pointer;font-weight:800">Language</button>
-    <div id="home-lang-menu" style="display:none;background:var(--surface);color:var(--text);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.2);overflow:hidden;min-width:160px">
+<div id="home-lang-fab" style="position:fixed;right:22px;top:88px;z-index:1600;display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+    <button id="home-lang-btn" style="background:rgba(15,23,42,.85);color:#e2e8f0;padding:9px 14px;border-radius:999px;border:1px solid rgba(255,255,255,.12);cursor:pointer;font-weight:600;font-family:Poppins,sans-serif;font-size:.8rem;backdrop-filter:blur(10px)"><i class="fa-solid fa-language mr-1"></i>Language</button>
+    <div id="home-lang-menu" style="display:none;background:rgba(15,23,42,.95);color:#e2e8f0;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.6);overflow:hidden;min-width:160px;border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(12px)">
     </div>
 </div>
 
@@ -209,20 +245,18 @@ loadGrid(document.getElementById('recommendGrid'));
                 try{
                     const langs = (window._I18N && window._I18N.languages) ? window._I18N.languages : { en:'English', hi:'हिन्दी', ta:'தமிழ்', kn:'ಕನ್ನಡ', ml:'മലയാളം' };
                     menu.innerHTML = '';
-                    // prefer Tamil first
                     const order = ['ta','hi','ml','kn','en'];
                     const keys = order.concat(Object.keys(langs).filter(k=>!order.includes(k)));
                     keys.forEach(k=>{
                         if(!langs[k]) return;
-                        const item = document.createElement('div'); item.className='lang-option'; item.dataset.lang=k; item.style.cssText='padding:10px 12px;border-bottom:1px solid rgba(0,0,0,0.06);cursor:pointer';
-                        item.textContent = langs[k];
+                        const item = document.createElement('div'); item.className='lang-option'; item.dataset.lang=k; item.style.cssText='padding:10px 14px;border-bottom:1px solid rgba(255,255,255,.06);cursor:pointer;font-size:.85rem;transition:background .2s;font-family:Poppins,sans-serif';
+                    item.textContent = langs[k];
                         item.addEventListener('click', ()=>{
                             try{
                                 localStorage.setItem('agri_lang', k);
                                 document.documentElement.lang = k;
                                 if(btn) btn.textContent = langs[k];
                                 if(window.setLanguage) try{ window.setLanguage(k); }catch(e){}
-                                // Ensure translations apply after i18n loaded, then reload as a reliable fallback
                                 if(typeof ensureI18nLoaded === 'function'){
                                     ensureI18nLoaded(function(){ try{ if(typeof window.applyTranslations === 'function') window.applyTranslations(); }catch(e){} });
                                 } else if(typeof window.applyTranslations === 'function'){
@@ -230,7 +264,6 @@ loadGrid(document.getElementById('recommendGrid'));
                                 } else {
                                     try{ window.dispatchEvent(new CustomEvent('agri_lang_changed',{detail:k})); }catch(e){}
                                 }
-                                // Always reload shortly after selection to ensure visible change
                                 setTimeout(function(){ try{ location.reload(); }catch(e){} }, 250);
                                 menu.style.display='none';
                             }catch(e){ console.error(e) }
@@ -241,7 +274,6 @@ loadGrid(document.getElementById('recommendGrid'));
             }
             btn.addEventListener('click', (e)=>{ try{ e.stopPropagation(); if(menu.style.display==='block'){ menu.style.display='none'; } else { menu.style.display='block'; populate(); } }catch(e){} });
             document.addEventListener('click', (ev)=>{ try{ if(!menu.contains(ev.target) && ev.target !== btn) menu.style.display='none'; }catch(e){} });
-            // If i18n isn't loaded yet, attach loader
             if(window._I18N) populate(); else { const s = document.querySelector('script[src="/i18n.js"]'); if(s) s.addEventListener('load', populate); else { const s2 = document.createElement('script'); s2.src='/i18n.js'; s2.onload = populate; document.head.appendChild(s2); } }
         }catch(e){ }
     })();

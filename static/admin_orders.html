@@ -1,39 +1,51 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Admin — Manage Orders</title>
-  <link rel="stylesheet" href="/admin.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgriAI-360 | Orders</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    table { width:100%; border-collapse:collapse }
-    th, td { padding:8px 10px; border-bottom:1px solid #eee }
-    th { text-align:left; background:#f7f7f7 }
-    .muted { color:#666 }
-    .btn { padding:6px 8px; border-radius:4px; cursor:pointer }
-    .btn-del { background:#ff4d4f; color:white; border:none }
-    .btn-ok { background:#28a745; color:white; border:none }
-    .small-input { width:80px }
+    body{font-family:'Poppins',sans-serif!important}
+    .glass-panel{background:rgba(255,255,255,.03);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+    .gradient-text{background:linear-gradient(135deg,#34d399 0%,#3b82f6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .agri-table{width:100%;border-collapse:collapse}
+    .agri-table th{background:rgba(255,255,255,.04);color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.07em;padding:10px 14px;text-align:left;border-bottom:1px solid rgba(255,255,255,.07);font-weight:600}
+    .agri-table td{padding:10px 14px;color:#cbd5e1;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px;vertical-align:middle}
+    .agri-table tr:hover td{background:rgba(255,255,255,.025)}
+    .agri-small-input{width:80px;padding:5px 8px;border-radius:7px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;font-size:11px;outline:none;font-family:'Poppins',sans-serif}
+    .agri-small-input:focus{border-color:#34d399}
   </style>
 </head>
-<body>
-<script src="/theme.js"></script>
-  <div class="navbar">Admin — Orders</div>
-  <div class="container">
-    <div class="page-box">
-      <h2 style="margin-top:0">Manage Orders</h2>
-      <p class="muted">View, update status or delete orders.</p>
-      <div style="margin:12px 0;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <button id="refresh" class="btn btn-small">Refresh</button>
-        <div style="margin-left:8px">
-          <strong>Sell Orders:</strong> <span id="sellCount">0</span>
-          &nbsp;&nbsp;
-          <strong>Buy Orders:</strong> <span id="buyCount">0</span>
-        </div>
+<body class="bg-slate-900 min-h-screen text-slate-100">
+
+<div id="admin-nav-placeholder"></div>
+<script src="/admin-header.js"></script>
+
+<main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+  <div class="mb-6 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+    <div>
+      <h1 class="text-3xl font-extrabold text-white tracking-tight">Manage <span class="gradient-text">Orders</span></h1>
+      <p class="mt-1 text-slate-400 text-sm">View, update status, or delete orders.</p>
+    </div>
+    <div class="flex items-center gap-4 flex-wrap">
+      <button id="refresh" class="px-4 py-2.5 rounded-xl glass-panel text-slate-300 text-sm font-medium hover:text-white transition-colors flex items-center gap-2">
+        <i class="fa-solid fa-rotate-right fa-sm"></i> Refresh
+      </button>
+      <div class="text-sm text-slate-500">
+        <span class="text-slate-300 font-semibold">Sell: <span id="sellCount">0</span></span>
+        <span class="mx-2 text-slate-700">•</span>
+        <span class="text-slate-300 font-semibold">Buy: <span id="buyCount">0</span></span>
       </div>
-      <div id="tableWrap">Loading...</div>
     </div>
   </div>
+
+  <div class="glass-panel rounded-3xl p-6">
+    <div id="tableWrap" class="text-slate-400 text-sm">Loading...</div>
+  </div>
+</main>
 
 <script>
 async function api(path, opts){
@@ -43,46 +55,54 @@ async function api(path, opts){
 
 async function loadAdminOrders(){
   const wrap = document.getElementById('tableWrap');
-  wrap.innerHTML = 'Loading...';
-  // Fetch sells and buys separately from server for efficiency
+  wrap.innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
   const sellsResp = await api('/admin/api/orders?type=sell');
   const buysResp = await api('/admin/api/orders?type=buy');
-  if(!sellsResp.success || !buysResp.success){ wrap.innerHTML = '<div class="muted">Failed to load.</div>'; return }
+  if(!sellsResp.success || !buysResp.success){ wrap.innerHTML = '<div class="text-slate-500 text-sm">Failed to load.</div>'; return }
   const sells = sellsResp.orders || [];
   const buys = buysResp.orders || [];
-  if(!sells.length && !buys.length){ wrap.innerHTML = '<div class="muted">No orders yet.</div>'; document.getElementById('sellCount').textContent = '0'; document.getElementById('buyCount').textContent = '0'; return }
+  if(!sells.length && !buys.length){ wrap.innerHTML = '<div class="text-slate-500 text-sm italic">No orders yet.</div>'; document.getElementById('sellCount').textContent = '0'; document.getElementById('buyCount').textContent = '0'; return }
 
   document.getElementById('sellCount').textContent = sells.length;
   document.getElementById('buyCount').textContent = buys.length;
 
   function buildTable(rows){
-    if(!rows.length) return '<div class="muted">No items</div>';
+    if(!rows.length) return '<div class="text-slate-500 text-sm italic py-2">No items</div>';
     const tr = rows.map(o => {
       const ts = o.timestamp ? (parseFloat(o.timestamp) * 1000) : (o.id ? (parseInt(o.id)/1) : Date.now());
       const dt = new Date(ts);
       const status = o.status || '';
       return `<tr data-id="${o.id}">
-        <td>${o.id}</td>
-        <td>${o.type}</td>
-        <td>${o.product}</td>
-        <td><input class="small-input qty" value="${o.quantity}"></td>
-        <td><input class="small-input price" value="${o.price}"></td>
-        <td>${o.user||''}</td>
-        <td>${dt.toLocaleString()}</td>
-        <td><input class="small-input status" value="${status}"></td>
+        <td class="text-slate-500">${o.id}</td>
+        <td><span style="padding:2px 8px;border-radius:999px;background:rgba(16,185,129,.15);color:#34d399;font-size:10px;font-weight:600">${o.type}</span></td>
+        <td class="font-medium text-slate-200">${o.product}</td>
+        <td><input class="agri-small-input qty" value="${o.quantity}"></td>
+        <td><input class="agri-small-input price" value="${o.price}"></td>
+        <td class="text-slate-500">${o.user||''}</td>
+        <td class="text-slate-500">${dt.toLocaleString()}</td>
+        <td><input class="agri-small-input status" value="${status}"></td>
         <td>
-          <button class="btn btn-ok btn-small" data-action="save">Save</button>
-          <button class="btn btn-del btn-small" data-action="delete">Delete</button>
+          <div style="display:flex;gap:6px">
+            <button data-action="save" style="padding:5px 10px;border-radius:7px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.25);color:#34d399;font-size:11px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif">Save</button>
+            <button data-action="delete" style="padding:5px 10px;border-radius:7px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.25);color:#f87171;font-size:11px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif">Del</button>
+          </div>
         </td>
       </tr>`;
     }).join('');
-    return `<table class="admin-table" style="margin-bottom:18px"><thead><tr><th>ID</th><th>Type</th><th>Product</th><th>Qty</th><th>Price</th><th>User</th><th>Placed</th><th>Status</th><th>Actions</th></tr></thead><tbody>${tr}</tbody></table>`;
+    return `<div class="overflow-x-auto"><table class="agri-table"><thead><tr><th>ID</th><th>Type</th><th>Product</th><th>Qty</th><th>Price</th><th>User</th><th>Placed</th><th>Status</th><th>Actions</th></tr></thead><tbody>${tr}</tbody></table></div>`;
   }
 
-  const html = `<div><h3>Sell Orders</h3>${buildTable(sells)}</div><div><h3>Buy Orders</h3>${buildTable(buys)}</div>`;
-  wrap.innerHTML = html;
+  wrap.innerHTML = `<div class="space-y-6">
+    <div>
+      <div class="text-sm font-semibold text-emerald-400 uppercase tracking-wider mb-3"><i class="fa-solid fa-arrow-up fa-xs mr-1"></i>Sell Orders</div>
+      ${buildTable(sells)}
+    </div>
+    <div>
+      <div class="text-sm font-semibold text-blue-400 uppercase tracking-wider mb-3"><i class="fa-solid fa-arrow-down fa-xs mr-1"></i>Buy Orders</div>
+      ${buildTable(buys)}
+    </div>
+  </div>`;
 
-  // attach handlers (same as before)
   document.querySelectorAll('button[data-action]').forEach(btn=>{
     btn.addEventListener('click', async (e)=>{
       const tr = e.target.closest('tr');
@@ -91,13 +111,13 @@ async function loadAdminOrders(){
       if(action==='delete'){
         if(!confirm('Delete order '+id+'?')) return;
         const res = await api('/admin/api/order/'+id+'/delete', {method:'POST'});
-        if(res.success){ alert('Deleted'); loadAdminOrders() } else { alert('Failed: '+(res.message||'')) }
+        if(res.success){ loadAdminOrders() } else { alert('Failed: '+(res.message||'')) }
       } else if(action==='save'){
         const qty = tr.querySelector('.qty').value;
         const price = tr.querySelector('.price').value;
         const status = tr.querySelector('.status').value;
         const res = await api('/admin/api/order/'+id+'/update', {method:'POST', body: JSON.stringify({quantity: qty, price: price, status: status})});
-        if(res.success){ alert('Saved'); loadAdminOrders() } else { alert('Failed: '+(res.message||'')) }
+        if(res.success){ loadAdminOrders() } else { alert('Failed: '+(res.message||'')) }
       }
     });
   });

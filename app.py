@@ -1147,6 +1147,59 @@ def send_otp_email_async(email, otp):
     return True
 
 
+def _send_notification_email(to_email: str, subject: str, body: str):
+    """Send a generic notification email (non-OTP) using configured provider."""
+    if not _email_is_configured():
+        print('[NOTIFY] Email not configured, skipping notification')
+        return
+
+    provider = _email_provider()
+
+    def _send():
+        try:
+            if provider == 'brevo' or (provider == 'auto' and _brevo_is_configured()):
+                api_key = (os.getenv('BREVO_API_KEY') or '').strip()
+                from_email = (os.getenv('BREVO_FROM') or '').strip()
+                sender_name = (os.getenv('BREVO_SENDER_NAME') or 'AgriAI360').strip() or 'AgriAI360'
+                payload = {
+                    'sender': {'email': from_email, 'name': sender_name},
+                    'to': [{'email': to_email}],
+                    'subject': subject,
+                    'textContent': body,
+                }
+                headers = {
+                    'accept': 'application/json',
+                    'content-type': 'application/json',
+                    'api-key': api_key,
+                }
+                resp = requests.post('https://api.brevo.com/v3/smtp/email', json=payload, headers=headers, timeout=_http_timeout_seconds())
+                if resp.status_code in (200, 201, 202):
+                    print(f'[NOTIFY] Brevo email sent to {to_email}')
+                else:
+                    print(f'[NOTIFY] Brevo failed status={resp.status_code}')
+            elif provider == 'smtp' or (provider == 'auto' and _smtp_is_configured()):
+                sender_email = (os.getenv("EMAIL_USER") or "").strip()
+                app_password = (os.getenv("EMAIL_PASS") or "").strip().replace(" ", "")
+                msg = MIMEText(body)
+                msg["Subject"] = subject
+                msg["From"] = sender_email
+                msg["To"] = to_email
+                server = smtplib.SMTP("smtp.gmail.com", 587, timeout=_smtp_timeout_seconds())
+                try:
+                    server.ehlo(); server.starttls(); server.ehlo()
+                    server.login(sender_email, app_password)
+                    server.sendmail(sender_email, to_email, msg.as_string())
+                finally:
+                    try: server.quit()
+                    except Exception: pass
+                print(f'[NOTIFY] SMTP email sent to {to_email}')
+        except Exception as e:
+            print(f'[NOTIFY] Email send failed for {to_email}: {e}')
+
+    t = threading.Thread(target=_send, daemon=True)
+    t.start()
+
+
 def _send_email_now_or_async(email: str, otp: str):
     """Send OTP either synchronously (default) or asynchronously.
 
@@ -1343,7 +1396,29 @@ def login_password():
     if u.get("password") != hash_password(password):
         return {"success": False, "message": "Invalid credentials"}, 401
 
-    # Password OK — start OTP 2FA
+    # Password OK — log in directly (no OTP 2FA)
+    # Check for admin
+    if email.lower() in ADMIN_EMAILS:
+        session["admin"] = True
+        session["user"] = email
+        return {"success": True, "role": "admin", "redirect": "/admin/dashboard"}
+
+    session["user"] = email
+    return {"success": True, "role": "user", "redirect": "/home"}
+
+
+@app.route("/auth/forgot_password", methods=["POST"])
+def forgot_password():
+    """Send OTP for password reset."""
+    data = request.json or {}
+    email = data.get("email")
+    if not email:
+        return {"success": False, "message": "email required"}, 400
+
+    u = find_user(email)
+    if not u:
+        return {"success": False, "message": "No account found with that email"}, 404
+
     if not _email_is_configured():
         return {"success": False, "message": "Email not configured on server"}, 500
 
@@ -1351,14 +1426,58 @@ def login_password():
     session["otp"] = otp
     session["otp_email"] = email
     session["otp_expires_at"] = time.time() + 120
-    session["login_via_password"] = True
+    session["forgot_password"] = True
 
     try:
         _send_email_now_or_async(email, otp)
-        return {"success": True, "message": "OTP sent for login"}
+        return {"success": True, "message": "OTP sent to your email"}
     except Exception as e:
-        print(f"[OTP] send failed for {email} (login): {e}")
+        print(f"[OTP] send failed for {email} (forgot): {e}")
         return {"success": False, "message": "Failed to send OTP email"}, 502
+
+
+@app.route("/auth/reset_password", methods=["POST"])
+def reset_password():
+    """Verify OTP and set a new password."""
+    data = request.json or {}
+    user_otp = data.get("otp")
+    new_password = data.get("new_password")
+
+    if not user_otp or not new_password:
+        return {"success": False, "message": "OTP and new password required"}, 400
+
+    if "otp" not in session or "otp_email" not in session:
+        return {"success": False, "message": "OTP not generated"}, 400
+
+    # expiry check
+    try:
+        exp = session.get('otp_expires_at')
+        if exp and time.time() > float(exp):
+            session.pop('otp', None)
+            session.pop('otp_email', None)
+            session.pop('otp_expires_at', None)
+            return {"success": False, "message": "OTP expired"}
+    except Exception:
+        pass
+
+    if user_otp != session["otp"]:
+        return {"success": False, "message": "Invalid OTP"}
+
+    email = session.get("otp_email")
+    session.pop('otp', None)
+    session.pop('otp_email', None)
+    session.pop('otp_expires_at', None)
+    session.pop('forgot_password', None)
+
+    # Update user's password
+    users = load_users()
+    for u in users.get("users", []):
+        if u.get("email") == email:
+            u["password"] = hash_password(new_password)
+            break
+    save_users(users)
+
+    return {"success": True, "message": "Password reset successfully"}
 
 
 def login_required(f):
@@ -1471,12 +1590,6 @@ def list_orders():
     orders = read_orders()
     user = session.get('user')
     user_orders = [o for o in orders if o.get('user') == user]
-    # For non-admin users, hide 'buy' orders from their personal orders view
-    # so purchases are only visible to admins. Admins still see everything.
-    if session.get('admin'):
-        user_orders = [o for o in orders if o.get('user') == user]
-    else:
-        user_orders = [o for o in orders if o.get('user') == user and (o.get('type') or 'sell').lower() != 'buy']
     return jsonify({'success': True, 'orders': user_orders})
 
 
@@ -1550,6 +1663,7 @@ def marketplace():
             'price': price,
             'location': location,
             'notes': notes,
+            'status': 'pending',
             'timestamp': time.time()
         }
 
@@ -1644,6 +1758,12 @@ def marketplace():
         filtered = [o for o in filtered if (o.get('type') or 'sell').lower() != 'buy']
     except Exception:
         # If any order lacks expected fields, fallback to original filtered list
+        pass
+
+    # Exclude listings pending admin approval from public marketplace
+    try:
+        filtered = [o for o in filtered if (o.get('status') or 'approved') != 'pending']
+    except Exception:
         pass
 
     # Return limited public view (do not expose raw user email fully)
@@ -2413,14 +2533,20 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
 
     prompt = (
         "You are an agriculture market analyst. "
-        "Given live mandi price rows for a commodity, pick ONE recommended modal price to show the user. "
-        "Use INR and unit '100kg'. Prefer recent rows and ignore clearly invalid or missing prices. "
-        "If a focus location is provided, prioritize rows matching it (case-insensitive substring match). "
+        "The user searched for a commodity. Your job:\n"
+        "1. First, correct any spelling mistakes in the commodity name and identify the actual commodity.\n"
+        "2. Search the web for the CURRENT real-time mandi price of this commodity in India today. "
+        "Look for today's actual market prices from agmarknet.gov.in, commodityonline.com, "
+        "krishimaratavahini, or any reliable Indian agricultural price source.\n"
+        "3. If scraped mandi rows are also provided, cross-reference them with web data for accuracy.\n"
+        "4. Always return the CURRENT real market price from the web — not just a summary of the provided rows.\n"
+        "Use INR and unit '100kg'. "
+        "If a focus location is provided, try to find prices for that location. "
         "Return ONLY valid JSON with these keys: "
-        "recommended_modal_price, currency, unit, price_min, price_max, markets_count, as_of, rationale.\n"
-        f"Commodity: {commodity}\n"
+        "commodity_corrected, recommended_modal_price, currency, unit, price_min, price_max, markets_count, as_of, rationale.\n"
+        f"User searched: {commodity}\n"
         f"Focus location: {focus}\n"
-        f"Rows (JSON array): {json.dumps(items_in, ensure_ascii=False)}"
+        f"Scraped rows for reference (may be empty): {json.dumps(items_in, ensure_ascii=False)}"
     )
 
     try:
@@ -2428,6 +2554,7 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
             'contents': [
                 {'role': 'user', 'parts': [{'text': prompt}]}
             ],
+            'tools': [{'google_search': {}}],
             'generationConfig': {
                 'temperature': 0.2,
                 'maxOutputTokens': 512
@@ -2437,6 +2564,7 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
             'contents': [
                 {'role': 'user', 'parts': [{'text': prompt}]}
             ],
+            'tools': [{'google_search': {}}],
             'generation_config': {
                 'temperature': 0.2,
                 'max_output_tokens': 512
@@ -2897,8 +3025,8 @@ def price():
             update_prices_for_commodity(commodity, force=True)
             cache = load_cache()
             items = cache.get("commodities", {}).get(key, {}).get("items", [])
-        except Exception as e:
-            return jsonify({"success": False, "msg": f"Fetch failed: {str(e)}"}), 500
+        except Exception:
+            pass  # will still try Gemini with empty items
 
     resp = {"success": True, "data": items}
     if ai_requested:
@@ -3562,6 +3690,72 @@ def admin_api_product_toggle(product_id):
     return jsonify({'success': False, 'message': 'not found'}), 404
 
 
+@app.route('/admin/api/pending_listings', methods=['GET'])
+def admin_api_pending_listings():
+    """Return all sell listings with status='pending' for admin review."""
+    x = require_admin()
+    if x:
+        return x
+    orders = read_orders()
+    pending = [o for o in orders if o.get('status') == 'pending' and (o.get('type') or 'sell').lower() == 'sell']
+    # Sanitize _id for JSON serialization
+    out = []
+    for o in pending:
+        item = {k: v for k, v in o.items() if k != '_id'}
+        out.append(item)
+    return jsonify({'success': True, 'listings': out})
+
+
+@app.route('/admin/api/listing/<int:listing_id>/approve', methods=['POST'])
+def admin_api_approve_listing(listing_id):
+    """Approve a pending sell listing so it appears on public marketplace."""
+    x = require_admin()
+    if x:
+        return x
+    try:
+        # Get listing details before approving for email notification
+        orders = read_orders()
+        listing = next((o for o in orders if int(o.get('id', 0)) == listing_id), None)
+        update_order_by_id(listing_id, {'status': 'approved'})
+        # Send email notification to the user
+        if listing and listing.get('user'):
+            user_email = listing['user']
+            product = listing.get('product', 'your listing')
+            _send_notification_email(
+                user_email,
+                'AgriAI360 - Your Listing Has Been Approved!',
+                f'Hello,\n\nYour sell listing for "{product}" has been approved by the admin and is now visible on the marketplace.\n\nThank you for using AgriAI360!'
+            )
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/admin/api/listing/<int:listing_id>/reject', methods=['POST'])
+def admin_api_reject_listing(listing_id):
+    """Reject and remove a pending sell listing."""
+    x = require_admin()
+    if x:
+        return x
+    try:
+        # Get listing details before rejecting for email notification
+        orders = read_orders()
+        listing = next((o for o in orders if int(o.get('id', 0)) == listing_id), None)
+        delete_order_by_id(listing_id)
+        # Send email notification to the user
+        if listing and listing.get('user'):
+            user_email = listing['user']
+            product = listing.get('product', 'your listing')
+            _send_notification_email(
+                user_email,
+                'AgriAI360 - Listing Update',
+                f'Hello,\n\nYour sell listing for "{product}" was not approved by the admin.\n\nPlease review and resubmit if needed.\n\nThank you for using AgriAI360!'
+            )
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @app.route('/admin/api/orders', methods=['GET'])
 def admin_api_list_orders():
     x = require_admin()
@@ -3633,8 +3827,24 @@ def admin_api_update_order(order_id):
         except:
             pass
 
+    # Get order details before updating for email notification
+    order_info = None
+    if status in ('approved', 'rejected', 'completed', 'cancelled'):
+        orders = read_orders()
+        order_info = next((o for o in orders if int(o.get('id', 0)) == order_id), None)
+
     ok = update_order_by_id(order_id, updates)
     if ok:
+        # Send email notification on status change
+        if order_info and order_info.get('user') and status:
+            user_email = order_info['user']
+            product = order_info.get('product', 'your order')
+            order_type = (order_info.get('type') or 'order').capitalize()
+            _send_notification_email(
+                user_email,
+                f'AgriAI360 - {order_type} Status Update',
+                f'Hello,\n\nYour {order_type.lower()} for "{product}" has been updated to: {status}.\n\nThank you for using AgriAI360!'
+            )
         return jsonify({'success': True})
     return jsonify({'success': False, 'message': 'Order not found'}), 404
 

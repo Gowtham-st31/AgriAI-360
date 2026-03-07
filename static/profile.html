@@ -1,60 +1,109 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Profile - Agri360</title>
-  <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AgriAI-360 | Profile</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    .profile-card{max-width:900px;margin:28px auto;padding:22px;background:var(--surface);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.06);color:var(--text)}
-    .profile-header{display:flex;align-items:center;gap:16px}
-    .profile-avatar{width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,0.04);display:flex;align-items:center;justify-content:center;color:var(--text);font-weight:700}
-    table.orders{width:100%;border-collapse:collapse;margin-top:18px}
-    table.orders th, table.orders td{padding:8px 10px;border-bottom:1px solid rgba(0,0,0,0.06);text-align:left;color:var(--text)}
-    body.dark-mode .profile-card{ background: rgba(255,255,255,0.02); box-shadow: none }
-    body.dark-mode .profile-avatar{ background: rgba(255,255,255,0.02); color: var(--text) }
+    body{font-family:'Poppins',sans-serif!important}
+    .glass-panel{background:rgba(255,255,255,.03);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+    .gradient-text{background:linear-gradient(135deg,#34d399 0%,#3b82f6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .info-row{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+    .info-row:last-child{border-bottom:none}
+    .info-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px}
+    .info-label{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+    .info-value{font-size:14px;color:#e2e8f0;font-weight:500;margin-top:2px}
   </style>
 </head>
-<body>
-<script src="/theme.js"></script>
+<body class="bg-slate-900 min-h-screen text-slate-100">
 
-<div id="site-header-placeholder"></div>
+<script src="/theme.js"></script>
+<div id="site-header"></div>
 <script src="/header.js"></script>
 
-<div class="profile-card">
-  <div class="profile-header">
-    <div class="profile-avatar">U</div>
-    <div>
-      <h2 id="email">User</h2>
-      <div id="ordersCount" class="muted"></div>
+<main class="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+  <div class="mb-6">
+    <h1 class="text-2xl font-extrabold text-white tracking-tight"><i class="fa-solid fa-user-circle mr-2 text-emerald-400"></i>My <span class="gradient-text">Profile</span></h1>
+    <p class="mt-1 text-slate-500 text-sm">Your personal information</p>
+  </div>
+
+  <div class="glass-panel rounded-3xl p-6 sm:p-8">
+    <!-- Avatar + Email header -->
+    <div class="flex items-center gap-4 mb-6 pb-6" style="border-bottom:1px solid rgba(255,255,255,.07)">
+      <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-blue-500 flex items-center justify-center text-white text-2xl font-bold shadow-lg shadow-emerald-500/20" id="avatar">U</div>
+      <div>
+        <h2 class="text-lg font-bold text-white" id="display-name">User</h2>
+        <div class="text-slate-500 text-sm" id="display-email"></div>
+      </div>
+    </div>
+
+    <!-- Personal Info -->
+    <div id="info-area">
+      <div class="info-row">
+        <div class="info-icon" style="background:rgba(16,185,129,.12)"><i class="fa-solid fa-envelope text-emerald-400"></i></div>
+        <div><div class="info-label">Email</div><div class="info-value" id="info-email">—</div></div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon" style="background:rgba(59,130,246,.12)"><i class="fa-solid fa-user text-blue-400"></i></div>
+        <div><div class="info-label">Full Name</div><div class="info-value" id="info-name">—</div></div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon" style="background:rgba(168,85,247,.12)"><i class="fa-solid fa-phone text-purple-400"></i></div>
+        <div><div class="info-label">Phone</div><div class="info-value" id="info-phone">—</div></div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon" style="background:rgba(245,158,11,.12)"><i class="fa-solid fa-location-dot text-amber-400"></i></div>
+        <div><div class="info-label">Address</div><div class="info-value" id="info-address">—</div></div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon" style="background:rgba(236,72,153,.12)"><i class="fa-solid fa-city text-pink-400"></i></div>
+        <div><div class="info-label">City</div><div class="info-value" id="info-city">—</div></div>
+      </div>
+      <div class="info-row">
+        <div class="info-icon" style="background:rgba(20,184,166,.12)"><i class="fa-solid fa-map-pin text-teal-400"></i></div>
+        <div><div class="info-label">Pincode</div><div class="info-value" id="info-pincode">—</div></div>
+      </div>
     </div>
   </div>
 
-  <h3 style="margin-top:18px">Orders</h3>
-  <div id="ordersArea">Loading orders...</div>
-</div>
+  <!-- Quick link to orders -->
+  <a href="/buy-sell" class="mt-4 flex items-center justify-center gap-2 glass-panel rounded-2xl p-4 text-emerald-400 font-semibold text-sm hover:border-emerald-500/30 transition-colors" style="text-decoration:none">
+    <i class="fa-solid fa-receipt"></i> View My Orders
+  </a>
+</main>
 
 <script>
 async function loadProfile(){
   try{
-    const u = await (await fetch('/api/user')).json();
-    if(!u.logged){ document.getElementById('email').innerText='Not logged in'; document.getElementById('ordersArea').innerHTML='Please login to see orders.'; return }
-    document.getElementById('email').innerText = u.user.email;
-    document.getElementById('ordersCount').innerText = (u.orders_count || 0) + ' orders';
+    const u=await(await fetch('/api/user')).json();
+    if(!u.logged){
+      document.getElementById('display-name').textContent='Not logged in';
+      document.getElementById('display-email').textContent='Please login to view your profile';
+      return;
+    }
+    const email=u.user.email||'';
+    const info=u.user.info||{};
+    const profile=info.profile||{};
+    const name=profile.name||info.name||'';
 
-    // fetch orders
-    const ro = await (await fetch('/api/orders', {credentials:'same-origin'})).json();
-    if(!ro.success){ document.getElementById('ordersArea').innerHTML='Could not load orders'; return }
-    const orders = ro.orders || [];
-    if(!orders.length){ document.getElementById('ordersArea').innerHTML='<div class="muted">No orders found.</div>'; return }
+    document.getElementById('avatar').textContent=email[0].toUpperCase();
+    document.getElementById('display-name').textContent=name||email.split('@')[0];
+    document.getElementById('display-email').textContent=email;
 
-    let html = '<table class="orders"><thead><tr><th>ID</th><th>Type</th><th>Product</th><th>Qty</th><th>Price</th><th>Placed</th></tr></thead><tbody>';
-    html += orders.map(o=>`<tr><td>${o.id}</td><td>${o.type}</td><td>${o.product}</td><td>${o.quantity}</td><td>${o.price}</td><td>${new Date(o.timestamp*1000).toLocaleString()}</td></tr>`).join('');
-    html += '</tbody></table>';
-    document.getElementById('ordersArea').innerHTML = html;
-  }catch(e){ document.getElementById('ordersArea').innerHTML='Error loading profile'; console.error(e) }
+    document.getElementById('info-email').textContent=email||'—';
+    document.getElementById('info-name').textContent=name||'—';
+    document.getElementById('info-phone').textContent=profile.phone||info.phone||'—';
+    document.getElementById('info-address').textContent=profile.address||info.address||'—';
+    document.getElementById('info-city').textContent=profile.city||info.city||'—';
+    document.getElementById('info-pincode').textContent=profile.pincode||info.pincode||'—';
+  }catch(e){console.error(e)}
 }
 loadProfile();
 </script>
-
+</body>
+</html>
 </body>
 </html>

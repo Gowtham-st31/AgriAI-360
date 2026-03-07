@@ -1,6 +1,13 @@
 // header.js - injects a site header and profile menu
 // Only inject header on site pages (skip profile and admin pages)
 (async function(){
+  // Inject ui-kit (Tailwind + FA + Poppins + CSS) early
+  try{
+    if(!document.getElementById('agri-kit-css')){
+      var _uks=document.createElement('script'); _uks.src='/ui-kit.js'; document.head.appendChild(_uks);
+    }
+  }catch(e){}
+
   // Apply saved theme early so pages (including those that skip header) get consistent styles
   try{
     const saved = localStorage.getItem('agri_theme');
@@ -17,59 +24,61 @@
 
   try{
     const _path = (window.location && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
-    // skip if path contains 'profile' or 'admin' (covers /profile, /profile.html, /admin/*, admin_dashboard, admin_*.html, etc.)
-    if(_path.includes('profile') || _path.includes('/admin') || _path.indexOf('admin_')!==-1) {
-      // do nothing on admin/profile pages (but theme is already applied)
+    // skip if path contains 'admin' (covers /admin/*, admin_dashboard, admin_*.html, etc.)
+    if(_path.includes('/admin') || _path.indexOf('admin_')!==-1) {
+      // do nothing on admin pages (but theme is already applied)
       return;
     }
   }catch(e){ /* ignore and continue to render header by default */ }
     function createHeaderHtml(){
+    var LS='color:#94a3b8;text-decoration:none;padding:7px 12px;border-radius:8px;font-size:13px;font-weight:500;transition:all .15s;display:flex;align-items:center;gap:5px;white-space:nowrap';
+    var LH="this.style.color='#fff';this.style.background='rgba(255,255,255,.08)'";
+    var LO="this.style.color='#94a3b8';this.style.background='transparent'";
     return `
-    <header class="site-header">
-      <div class="site-header-inner">
-        <div class="header-left">
-          <a id="brand-link" href="/home" class="brand">
-            <img src="/icons/logo.png" alt="Agri360" onerror="this.style.display='none'">
-            <span id="brand-text">Agri360</span>
-          </a>
+    <nav style="position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(15,23,42,.8);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.06);font-family:'Poppins',sans-serif" id="site-nav">
+      <div style="max-width:1280px;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:68px;gap:16px">
+
+        <a id="brand-link" href="/home" style="display:flex;align-items:center;gap:10px;text-decoration:none;flex-shrink:0">
+          <div style="width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#10b981,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff;font-size:17px;box-shadow:0 4px 12px rgba(16,185,129,.35)">
+            <i class="fa-solid fa-leaf"></i>
+          </div>
+          <span style="font-size:18px;font-weight:700;color:#fff;letter-spacing:-.02em">Agri<span id="brand-text" style="background:linear-gradient(135deg,#34d399,#3b82f6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">AI-360</span></span>
+        </a>
+
+        <button class="mobile-menu-btn" id="mobile-menu-btn" type="button" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);color:#94a3b8;width:36px;height:36px;border-radius:9px;cursor:pointer;font-size:16px;align-items:center;justify-content:center" onclick="document.getElementById('mobile-drawer').style.display=document.getElementById('mobile-drawer').style.display==='flex'?'none':'flex'"><i class="fa-solid fa-bars"></i></button>
+
+        <div class="nav-links" style="display:flex;align-items:center;gap:2px;flex-wrap:nowrap">
+          <a id="nav-home" href="/home" title="Home" style="${LS}" onmouseover="${LH}" onmouseout="${LO}"><i class="fa-solid fa-house"></i></a>
+          <a id="nav-detect" href="/detect" data-i18n="nav.detect" style="${LS}" onmouseover="${LH}" onmouseout="${LO}"><i class="fa-solid fa-magnifying-glass-plus fa-xs"></i>Detect</a>
+          <a id="nav-market" href="/market" data-i18n="nav.market" style="${LS}" onmouseover="${LH}" onmouseout="${LO}"><i class="fa-solid fa-store fa-xs"></i>Market</a>
+          <a id="nav-weather" href="/weather" data-i18n="nav.weather" style="${LS}" onmouseover="${LH}" onmouseout="${LO}"><i class="fa-solid fa-cloud-sun fa-xs"></i>Weather</a>
+          <a id="nav-buy" href="/buy.html" data-i18n="nav.buy" style="${LS}" onmouseover="${LH}" onmouseout="${LO}">Buy</a>
+          <a id="nav-sell" href="/sell.html" data-i18n="nav.sell" style="${LS}" onmouseover="${LH}" onmouseout="${LO}">Sell</a>
         </div>
 
-        <div class="header-search">
-          <form id="site-search" onsubmit="event.preventDefault();performSearch()" class="search-form">
-            <input id="search-box" placeholder="Search products, e.g. tomato" />
-            <button id="voice-btn" type="button" title="Voice search">🎤</button>
-            <button id="search-btn" type="submit">Search</button>
-          </form>
-        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+          <style>
+            @media(max-width:768px){
+              #site-nav .nav-links{display:none !important}
+              #site-nav .mobile-menu-btn{display:flex !important}
+            }
+            #site-nav .mobile-menu-btn{display:none}
+          </style>
 
-        <div class="header-right">
-          <nav class="header-nav">
-            <a id="nav-buy" href="/buy.html" data-i18n="nav.buy">Buy</a>
-            <a id="nav-sell" href="/sell.html" data-i18n="nav.sell">Sell</a>
-            <a id="nav-market" href="/market" data-i18n="nav.market">Market</a>
-            <a id="nav-detect" href="/detect" data-i18n="nav.detect">Detect</a>
-            <a id="nav-weather" href="/weather" data-i18n="nav.weather">Weather</a>
-            <a id="cart-link" href="/cart" data-i18n="nav.cart">Cart <span id="cart-count">0</span></a>
-          </nav>
-
-          <!-- left header language control removed; keep single language FAB at top-right -->
-
-          <button id="theme-toggle" title="Toggle theme" class="theme-toggle">🌙</button>
-          <div id="profile-block" class="profile-block"></div>
-        </div>
-      </div>
-
-      <div class="site-subnav">
-        <div class="subnav-inner">
-          <a href="/market?q=fruits">Fruits</a>
-          <a href="/market?q=vegetables">Vegetables</a>
-          <a href="/market?q=grains">Grains</a>
-          <a href="/market?q=seeds">Seeds</a>
-          <a href="/detect">Detect</a>
-          <a href="/weather">Weather Advice</a>
+          <div id="profile-block" style="position:relative"></div>
         </div>
       </div>
-    </header>`;
+    </nav>
+    <div id="mobile-drawer" style="display:none;position:fixed;top:68px;left:0;right:0;z-index:9998;background:rgba(15,23,42,.95);backdrop-filter:blur(20px);flex-direction:column;padding:12px 16px;gap:4px;border-bottom:1px solid rgba(255,255,255,.08);font-family:'Poppins',sans-serif">
+      <a href="/home" style="padding:10px 12px;color:#94a3b8;text-decoration:none;border-radius:8px;font-size:14px;display:flex;align-items:center;gap:8px" onclick="this.parentElement.style.display='none'"><i class="fa-solid fa-house fa-xs"></i>Home</a>
+      <a href="/detect" style="padding:10px 12px;color:#94a3b8;text-decoration:none;border-radius:8px;font-size:14px;display:flex;align-items:center;gap:8px" onclick="this.parentElement.style.display='none'"><i class="fa-solid fa-magnifying-glass-plus fa-xs"></i>Detect</a>
+      <a href="/market" style="padding:10px 12px;color:#94a3b8;text-decoration:none;border-radius:8px;font-size:14px;display:flex;align-items:center;gap:8px" onclick="this.parentElement.style.display='none'"><i class="fa-solid fa-store fa-xs"></i>Market</a>
+      <a href="/weather" style="padding:10px 12px;color:#94a3b8;text-decoration:none;border-radius:8px;font-size:14px;display:flex;align-items:center;gap:8px" onclick="this.parentElement.style.display='none'"><i class="fa-solid fa-cloud-sun fa-xs"></i>Weather</a>
+      <a href="/buy.html" style="padding:10px 12px;color:#94a3b8;text-decoration:none;border-radius:8px;font-size:14px;display:flex;align-items:center;gap:8px" onclick="this.parentElement.style.display='none'"><i class="fa-solid fa-cart-shopping fa-xs"></i>Buy</a>
+      <a href="/sell.html" style="padding:10px 12px;color:#94a3b8;text-decoration:none;border-radius:8px;font-size:14px;display:flex;align-items:center;gap:8px" onclick="this.parentElement.style.display='none'"><i class="fa-solid fa-tags fa-xs"></i>Sell</a>
+    </div>
+    <div style="height:68px"></div>
+    `;
   }
 
   function renderProfileMenu(user){
@@ -78,7 +87,7 @@
     // ensure the Home link goes to /login for anonymous users
     const homeLink = document.getElementById('nav-home');
     if(!user || !user.logged){
-      p.innerHTML = `<a href='/login' style='color:#12733a;text-decoration:none;font-weight:600'>Login</a>`;
+      p.innerHTML = `<a href='/login' style='display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:9px;background:linear-gradient(135deg,#10b981,#0ea5e9);color:#fff;text-decoration:none;font-size:13px;font-weight:600;box-shadow:0 4px 12px rgba(16,185,129,.3)'>Login</a>`;
       if(homeLink) homeLink.href = '/login';
       return;
     }
@@ -86,13 +95,20 @@
     if(homeLink) homeLink.href = '/home';
 
     const email = (user.user && user.user.email) || 'user';
+    const initial = email[0].toUpperCase();
     p.innerHTML = `
-      <button id='profile-btn' style='background:transparent;border:1px solid rgba(255,255,255,0.06);padding:6px 10px;border-radius:20px;cursor:pointer;color:var(--primary-contrast);font-weight:700'>${email.split('@')[0]}</button>
-      <div id='profile-menu' style='display:none;position:absolute;right:0;top:38px;background:var(--surface);border:1px solid rgba(0,0,0,0.06);box-shadow:0 6px 18px rgba(0,0,0,0.08);min-width:200px;border-radius:8px;padding:8px;z-index:999;color:var(--text)'>
-        <div style='padding:8px 10px;border-bottom:1px solid rgba(0,0,0,0.04)'><strong style='color:var(--text)'>${email}</strong></div>
-        <a href='/profile' style='display:block;padding:8px 10px;color:var(--text);text-decoration:none'>Profile</a>
-        <a href='/buy-sell' style='display:block;padding:8px 10px;color:var(--text);text-decoration:none'>My Orders</a>
-        <button id='logout-btn' style='margin:8px 10px;padding:8px 10px;width:calc(100% - 20px);background:var(--surface);border:1px solid rgba(0,0,0,0.06);border-radius:6px;cursor:pointer;color:var(--text)'>Logout</button>
+      <button id='profile-btn' style='display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.1);padding:6px 12px 6px 6px;border-radius:20px;cursor:pointer;color:#f1f5f9;font-weight:600;font-size:13px;font-family:Poppins,sans-serif;transition:all .15s' onmouseover="this.style.background='rgba(255,255,255,.12)'" onmouseout="this.style.background='rgba(255,255,255,.07)'">
+        <span style='width:26px;height:26px;border-radius:13px;background:linear-gradient(135deg,#10b981,#3b82f6);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff'>${initial}</span>
+        ${email.split('@')[0]}
+      </button>
+      <div id='profile-menu' style='display:none;position:absolute;right:0;top:44px;background:#1e293b;border:1px solid rgba(255,255,255,.1);box-shadow:0 16px 40px rgba(0,0,0,.4);min-width:200px;border-radius:14px;padding:8px;z-index:9999;font-family:Poppins,sans-serif'>
+        <div style='padding:10px 12px 10px;border-bottom:1px solid rgba(255,255,255,.07);margin-bottom:4px'>
+          <div style='font-size:11px;color:#64748b;margin-bottom:2px'>Signed in as</div>
+          <strong style='color:#f1f5f9;font-size:13px'>${email}</strong>
+        </div>
+        <a href='/profile' style='display:flex;align-items:center;gap:8px;padding:9px 12px;color:#cbd5e1;text-decoration:none;border-radius:8px;font-size:13px;transition:all .15s' onmouseover="this.style.background='rgba(255,255,255,.07)'" onmouseout="this.style.background='transparent'"><i class='fa-solid fa-user fa-xs' style='color:#94a3b8'></i>Profile</a>
+        <a href='/buy-sell' style='display:flex;align-items:center;gap:8px;padding:9px 12px;color:#cbd5e1;text-decoration:none;border-radius:8px;font-size:13px;transition:all .15s' onmouseover="this.style.background='rgba(255,255,255,.07)'" onmouseout="this.style.background='transparent'"><i class='fa-solid fa-receipt fa-xs' style='color:#94a3b8'></i>My Orders</a>
+        <button id='logout-btn' style='display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;margin-top:4px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.2);border-radius:8px;cursor:pointer;color:#f87171;font-size:13px;font-weight:600;font-family:Poppins,sans-serif;transition:all .15s' onmouseover="this.style.background='rgba(239,68,68,.2)'" onmouseout="this.style.background='rgba(239,68,68,.12)'"><i class='fa-solid fa-arrow-right-from-bracket fa-xs'></i>Logout</button>
       </div>
     `;
 
@@ -133,7 +149,7 @@
         localStorage.setItem('agri_theme', 'light');
       }
       const btn = document.getElementById('theme-toggle');
-      if(btn) btn.textContent = (t === 'dark') ? '🌙' : '☀️';
+      if(btn) btn.innerHTML = (t === 'dark') ? '<i class="fa-solid fa-moon"></i>' : '<i class="fa-solid fa-sun"></i>';
     }catch(e){}
   }
 
@@ -145,7 +161,7 @@
   }
 
   // hook up theme toggle button (if present)
-  try{ const tb = document.getElementById('theme-toggle'); if(tb){ tb.addEventListener('click', toggleTheme); /* init label */ const saved=localStorage.getItem('agri_theme')||'dark'; tb.textContent = saved==='dark'?'🌙':'☀️'; } }catch(e){}
+  try{ const tb = document.getElementById('theme-toggle'); if(tb){ tb.addEventListener('click', toggleTheme); /* init label */ const saved=localStorage.getItem('agri_theme')||'dark'; tb.innerHTML = saved==='dark'?'<i class="fa-solid fa-moon"></i>':'<i class="fa-solid fa-sun"></i>'; } }catch(e){}
 
   // Ensure a theme is always selected for first-time visitors
   try{ if(!localStorage.getItem('agri_theme')){ localStorage.setItem('agri_theme','dark'); document.body.classList.add('dark-mode'); } }catch(e){}
@@ -212,46 +228,11 @@
   
   // i18n: populate language selector and apply translations
   try{
-    // populate selector with a small fallback set first so it's visible even if i18n.js fails
-    const fallbackLangs = { 'en':'English', 'hi':'हिन्दी', 'ta':'தமிழ்', 'kn':'ಕನ್ನಡ', 'ml':'മലയാളം' };
-    try{
-      const sel = document.getElementById('lang-select');
-      if(sel){
-        // populate only if empty
-        if(sel.options.length === 0){
-          // prefer Tamil first in fallback
-          const order = ['ta','hi','ml','kn','en'];
-          const keys = order.concat(Object.keys(fallbackLangs).filter(k=>!order.includes(k)));
-          keys.forEach(k=>{ if(!fallbackLangs[k]) return; const o = document.createElement('option'); o.value=k; o.textContent = fallbackLangs[k]; sel.appendChild(o) });
-        }
-        const cur = localStorage.getItem('agri_lang')||'en'; sel.value = cur;
-        sel.setAttribute('aria-label','Language');
-        sel.addEventListener('change', ()=>{ localStorage.setItem('agri_lang', sel.value); ensureI18nLoaded(applyTranslations); });
-      }
-    }catch(e){ console.error('i18n fallback init', e) }
-
     const script = document.createElement('script'); script.src='/i18n.js'; document.head.appendChild(script);
     script.onload = ()=>{
       try{
-        const sel = document.getElementById('lang-select');
-        if(!sel) return;
-        // replace with canonical languages from i18n.js (prefer Tamil first)
-        sel.innerHTML = '';
-        const langs = window._I18N && window._I18N.languages ? window._I18N.languages : fallbackLangs;
-        const order = ['ta','hi','ml','kn','en'];
-        const keys = order.concat(Object.keys(langs).filter(k=>!order.includes(k)));
-        keys.forEach(k=>{ if(!langs[k]) return; const o = document.createElement('option'); o.value=k; o.textContent = langs[k]; sel.appendChild(o) });
-        const cur = localStorage.getItem('agri_lang')||'en'; sel.value = cur;
-        // show readable current language next to selector (helps when native dropdown options are hard to style)
-        try{ const lc = document.getElementById('lang-current'); if(lc) lc.textContent = (langs[cur] || cur); }catch(e){}
-        // ensure previous listener isn't duplicated
-        sel.replaceWith(sel.cloneNode(true));
-        const fresh = document.getElementById('lang-select');
-        fresh.addEventListener('change', ()=>{ localStorage.setItem('agri_lang', fresh.value); document.documentElement.lang = fresh.value; try{ const lc = document.getElementById('lang-current'); if(lc) lc.textContent = (window._I18N && window._I18N.languages && window._I18N.languages[fresh.value]) || fresh.value }catch(e){}; ensureI18nLoaded(function(){ try{ if(typeof window.applyTranslations === 'function') window.applyTranslations(); }catch(e){} }); // reload as a fallback to ensure visible change
-        setTimeout(()=>{ try{ location.reload(); }catch(e){} }, 250);
-        });
         // expose helper for programmatic language changes
-        window.setLanguage = function(l){ try{ if(!l) return; localStorage.setItem('agri_lang', l); document.documentElement.lang = l; if(document.getElementById('lang-select')) document.getElementById('lang-select').value = l; ensureI18nLoaded(function(){ try{ if(typeof window.applyTranslations === 'function') window.applyTranslations(); }catch(e){} }); // fallback reload
+        window.setLanguage = function(l){ try{ if(!l) return; localStorage.setItem('agri_lang', l); document.documentElement.lang = l; ensureI18nLoaded(function(){ try{ if(typeof window.applyTranslations === 'function') window.applyTranslations(); }catch(e){} });
         setTimeout(()=>{ try{ location.reload(); }catch(e){} }, 250);
         }catch(e){} };
         ensureI18nLoaded(applyTranslations);

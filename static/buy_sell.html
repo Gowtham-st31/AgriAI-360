@@ -1,69 +1,48 @@
-<!doctype html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Buy / Sell (Premium)</title>
-  <link rel="stylesheet" href="/styles.css">
+  <title>AgriAI-360 | My Orders</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    .page-box { max-width: 720px; margin: 40px auto; padding: 28px; }
-    .orders { margin-top: 20px; }
-    .order { background: #f7fdf7; border: 1px solid #e6f3e6; padding: 12px; margin-bottom: 8px; border-radius: 6px; }
-    .muted { color: #666; font-size: 0.9em }
-    .premium-badge { display:inline-block; background:#ffd700; padding:4px 8px; border-radius:6px; margin-left:8px }
-    label { display:block; margin-top:10px }
-    input, select { width:100%; padding:8px; margin-top:6px }
-    button { margin-top:12px; padding:10px 14px }
+    body{font-family:'Poppins',sans-serif!important}
+    .glass-panel{background:rgba(255,255,255,.03);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+    .gradient-text{background:linear-gradient(135deg,#34d399 0%,#3b82f6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .agri-table{width:100%;border-collapse:collapse}
+    .agri-table th{background:rgba(255,255,255,.04);color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.07em;padding:10px 14px;text-align:left;border-bottom:1px solid rgba(255,255,255,.07);font-weight:600}
+    .agri-table td{padding:10px 14px;color:#cbd5e1;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px;vertical-align:middle}
+    .agri-table tr:hover td{background:rgba(255,255,255,.025)}
+    .tab-btn{padding:8px 20px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.08);background:transparent;color:#94a3b8;transition:all .15s;font-family:'Poppins',sans-serif}
+    .tab-btn.active{background:linear-gradient(135deg,#10b981,#3b82f6);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(16,185,129,.3)}
+    .status-badge{padding:2px 8px;border-radius:999px;font-size:10px;font-weight:600;display:inline-block}
   </style>
 </head>
-<body>
+<body class="bg-slate-900 min-h-screen text-slate-100">
+
 <script src="/theme.js"></script>
-  <div class="navbar">🌿 Farmer Assistant <span class="premium-badge">Premium</span></div>
+<div id="site-header"></div>
+<script src="/header.js"></script>
 
-  <div class="page-box">
-    <h2>Buy / Sell Marketplace</h2>
-    <p class="sub-text">Place buy or sell orders for farm produce. This is a premium feature — you must be logged in.</p>
-
-    <div id="notice" class="muted"></div>
-
-    <div id="form">
-      <label>Type</label>
-      <select id="type">
-        <option value="sell">Sell</option>
-        <option value="buy">Buy</option>
-      </select>
-
-      <label>Product</label>
-      <select id="product_select" style="width:100%;padding:8px;margin-top:6px;border-radius:6px;border:1px solid #ccc">
-        <option value="">-- Choose product --</option>
-      </select>
-      <div style="margin-top:8px"><small class="muted">If product not listed, type below</small></div>
-      <input id="product" placeholder="Or type product name (e.g., Tomato, Onion)" style="width:100%;padding:8px;margin-top:6px;border-radius:6px;border:1px solid #ccc">
-
-      <label>Quantity (kg)</label>
-      <input id="quantity" type="number" min="1" value="100">
-
-      <label>Price per kg (₹)</label>
-      <input id="price" type="number" min="0" step="0.01" value="10.00">
-
-      <button id="place">Place Order</button>
-    </div>
-
-    <h3>Your Orders</h3>
-    <div id="orders" class="orders">
-      <div class="muted">Loading...</div>
-    </div>
-
-    <hr style="margin:20px 0">
-
-    <h3>Available Products (Public View)</h3>
-    <p class="muted">All visitors can see aggregated available quantities for each product.</p>
-    <div style="display:flex;gap:12px;margin-top:8px;">
-      <input id="bs_search" placeholder="Search products (tomato)" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ccc">
-      <button id="bs_search_btn" style="padding:8px 12px">Search</button>
-    </div>
-    <div id="available_products" style="margin-top:16px"></div>
+<main class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+  <div class="mb-6">
+    <h1 class="text-2xl font-extrabold text-white tracking-tight"><i class="fa-solid fa-receipt mr-2 text-emerald-400"></i>My <span class="gradient-text">Orders</span></h1>
+    <p class="mt-1 text-slate-500 text-sm">Your buy and sell order history</p>
   </div>
+
+  <!-- Filter tabs -->
+  <div class="flex gap-2 mb-5">
+    <button class="tab-btn active" data-filter="all">All</button>
+    <button class="tab-btn" data-filter="buy"><i class="fa-solid fa-cart-shopping fa-xs mr-1"></i>Buy</button>
+    <button class="tab-btn" data-filter="sell"><i class="fa-solid fa-tags fa-xs mr-1"></i>Sell</button>
+  </div>
+
+  <div class="glass-panel rounded-3xl p-5 sm:p-6">
+    <div id="orders-area" class="text-slate-500 text-sm">Loading orders...</div>
+  </div>
+</main>
 
 <script>
 async function api(path, opts) {
@@ -71,106 +50,74 @@ async function api(path, opts) {
   try { return await res.json(); } catch(e){ return {success:false, message:'Invalid JSON response'} }
 }
 
-async function loadOrders(){
-  const r = await api('/api/orders');
-  const box = document.getElementById('orders');
-  box.innerHTML = '';
-  if(!r.success){
-    document.getElementById('notice').innerText = 'Failed to load orders: ' + (r.message||'');
+let allOrders = [];
+let currentFilter = 'all';
+
+function statusColor(s){
+  if(!s) return 'background:rgba(100,116,139,.15);color:#94a3b8';
+  s=s.toLowerCase();
+  if(s==='approved') return 'background:rgba(16,185,129,.15);color:#34d399';
+  if(s==='pending') return 'background:rgba(245,158,11,.15);color:#fbbf24';
+  if(s==='rejected'||s==='cancelled') return 'background:rgba(239,68,68,.15);color:#f87171';
+  if(s==='completed') return 'background:rgba(59,130,246,.15);color:#60a5fa';
+  return 'background:rgba(100,116,139,.15);color:#94a3b8';
+}
+
+function typeColor(t){
+  if(!t) return 'background:rgba(100,116,139,.15);color:#94a3b8';
+  t=t.toLowerCase();
+  if(t==='sell') return 'background:rgba(16,185,129,.15);color:#34d399';
+  if(t==='buy') return 'background:rgba(59,130,246,.15);color:#60a5fa';
+  return 'background:rgba(100,116,139,.15);color:#94a3b8';
+}
+
+function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
+
+function renderOrders(){
+  const box = document.getElementById('orders-area');
+  const filtered = currentFilter==='all' ? allOrders : allOrders.filter(o=>(o.type||'').toLowerCase()===currentFilter);
+  if(!filtered.length){
+    box.innerHTML='<div class="text-slate-500 text-sm italic py-4 text-center">No orders found.</div>';
     return;
   }
-  const orders = r.orders || [];
-  if(!orders.length){ box.innerHTML = '<div class="muted">No orders yet.</div>'; return }
-  orders.reverse().forEach(o => {
-    const d = new Date(o.timestamp*1000 || o.id);
-    const el = document.createElement('div'); el.className='order';
-    el.innerHTML = `<strong>${o.type.toUpperCase()}</strong> • ${o.product} • ${o.quantity} kg • ₹${o.price} <div class="muted">Placed: ${d.toLocaleString()}</div>`;
-    box.appendChild(el);
+  let html='<div class="overflow-x-auto"><table class="agri-table"><thead><tr><th>Type</th><th>Product</th><th>Qty</th><th>Price</th><th>Status</th><th>Date</th></tr></thead><tbody>';
+  html+=filtered.map(o=>{
+    const d=new Date((o.timestamp||0)*1000);
+    const dateStr=o.timestamp?d.toLocaleDateString():'—';
+    return '<tr>'
+      +'<td><span class="status-badge" style="'+typeColor(o.type)+'">'+escapeHtml((o.type||'—').toUpperCase())+'</span></td>'
+      +'<td class="font-medium text-slate-200">'+escapeHtml(o.product||'—')+'</td>'
+      +'<td>'+escapeHtml(String(o.quantity||'—'))+'</td>'
+      +'<td class="text-emerald-400 font-semibold">\u20B9'+escapeHtml(String(o.price||'—'))+'</td>'
+      +'<td><span class="status-badge" style="'+statusColor(o.status)+'">'+escapeHtml((o.status||'—'))+'</span></td>'
+      +'<td class="text-slate-500">'+dateStr+'</td>'
+      +'</tr>';
+  }).join('');
+  html+='</tbody></table></div>';
+  box.innerHTML=html;
+}
+
+async function loadOrders(){
+  const r = await api('/api/orders');
+  if(!r.success){
+    document.getElementById('orders-area').innerHTML='<div class="text-slate-500 text-sm">Please login to view your orders. <a href="/login" class="text-emerald-400 underline">Login</a></div>';
+    return;
+  }
+  allOrders = (r.orders||[]).sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+  renderOrders();
+}
+
+// Tab click handlers
+document.querySelectorAll('.tab-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter=btn.dataset.filter;
+    renderOrders();
   });
-}
-
-// Public aggregated available products (sum of SELL quantities by product)
-async function loadAvailableProducts(q) {
-  const term = (q===undefined)? document.getElementById('bs_search').value.trim() : q;
-  const box = document.getElementById('available_products');
-  box.innerHTML = '<div class="muted">Loading available products...</div>';
-    try{
-    let url = '/api/marketplace';
-    if(term){
-      if((term||'').toString().toLowerCase() === 'deals') url += '?q=deals&today=true';
-      else url += '?q=' + encodeURIComponent(term);
-    }
-    const res = await fetch(url, {credentials:'include'});
-    const j = await res.json();
-    if(!j.success){ box.innerHTML = '<div class="muted">Failed to load.</div>'; return }
-    const items = j.items || [];
-    // aggregate sells by product
-    const agg = {};
-    items.forEach(it => {
-      if((it.type||'').toLowerCase() !== 'sell') return;
-      const p = (it.product||'').toLowerCase().trim();
-      if(!p) return;
-      agg[p] = agg[p] || {product: it.product, quantity:0, sample: it};
-      agg[p].quantity += Number(it.quantity)||0;
-    });
-
-    const rows = Object.values(agg);
-    if(rows.length===0){ box.innerHTML = '<div class="muted">No available products yet.</div>'; return }
-
-    box.innerHTML = rows.map(r=>{
-      const imgPath = '/icons/' + (r.product||'market').toLowerCase().replace(/\s+/g,'-') + '.png';
-      return `<div class="order" style="display:flex;align-items:center;">
-                <img src="${imgPath}" onerror="this.onerror=null;this.src='/icons/market.png'" style="width:72px;height:72px;object-fit:cover;border-radius:8px;margin-right:12px">
-                <div style="flex:1">
-                  <div style="font-weight:700">${r.product}</div>
-                  <div class="muted">Available: ${r.quantity} kg</div>
-                </div>
-              </div>`;
-    }).join('');
-
-  }catch(e){ box.innerHTML = '<div class="muted">Could not load products.</div>' }
-}
-
-document.getElementById('bs_search_btn').addEventListener('click', ()=> loadAvailableProducts());
-
-// Load product catalog for product select
-async function loadProductCatalog(){
-  try{
-    const res = await fetch('/api/products');
-    const j = await res.json();
-    const sel = document.getElementById('product_select');
-    if(!j.success) return;
-    sel.innerHTML = '<option value="">-- Choose product --</option>' + (j.products||[]).map(p=>`<option value="${p.name}">${p.name}</option>`).join('');
-  }catch(e){}
-}
-
-// initial loads
-loadProductCatalog();
-loadAvailableProducts();
-loadOrders();
-
-document.getElementById('place').addEventListener('click', async ()=>{
-  const type = document.getElementById('type').value;
-  const sel = document.getElementById('product_select');
-  const productTyped = document.getElementById('product').value.trim();
-  const product = (sel.value && sel.value !== '') ? sel.value : productTyped;
-  const quantity = Number(document.getElementById('quantity').value);
-  const price = Number(document.getElementById('price').value);
-  if(!product){ alert('Enter product name'); return }
-  const r = await api('/api/order', {method:'POST', body: JSON.stringify({type, product, quantity, price})});
-  if(!r.success){ alert('Failed: '+(r.message||'Unknown')); return }
-  alert('Order placed');
-  document.getElementById('product').value='';
-  loadOrders();
 });
 
-// initial load
 loadOrders();
 </script>
-
-<body>
-
-<div id="site-header"></div>
-<script src="/header.js"></script>
-
-<div class="page-box">
+</body>
+</html>

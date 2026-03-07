@@ -1,36 +1,51 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Admin — Products</title>
-  <link rel="stylesheet" href="/admin.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgriAI-360 | Products</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    .muted{color:#666}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:8px;border-bottom:1px solid #eee}
-    .btn{padding:6px 8px;border-radius:4px}
-    .btn-del{background:#ff4d4f;color:#fff;border:none}
-    .btn-toggle{background:#1a8f46;color:#fff;border:none}
+    body{font-family:'Poppins',sans-serif!important}
+    .glass-panel{background:rgba(255,255,255,.03);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,.08);box-shadow:0 4px 30px rgba(0,0,0,.12)}
+    .gradient-text{background:linear-gradient(135deg,#34d399 0%,#3b82f6 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    .agri-input{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;transition:border-color .2s,box-shadow .2s;font-family:'Poppins',sans-serif}
+    .agri-input:focus{outline:none;border-color:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.15)}
+    .agri-input::placeholder{color:rgba(255,255,255,.3)}
+    .agri-table{width:100%;border-collapse:collapse}
+    .agri-table th{background:rgba(255,255,255,.04);color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.07em;padding:10px 14px;text-align:left;border-bottom:1px solid rgba(255,255,255,.07);font-weight:600}
+    .agri-table td{padding:10px 14px;color:#cbd5e1;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px;vertical-align:middle}
+    .agri-table tr:hover td{background:rgba(255,255,255,.025)}
   </style>
 </head>
-<body>
-<script src="/theme.js"></script>
-  <div class="navbar">Admin — Products</div>
-  <div class="container">
-    <div class="page-box">
-    <h2>Manage Product Catalog</h2>
-    <p class="muted">Add, remove or toggle availability of products displayed on Buy/Sell.</p>
+<body class="bg-slate-900 min-h-screen text-slate-100">
 
-    <div style="display:flex;gap:8px;margin-bottom:12px;">
-      <input id="p_name" placeholder="Product name" style="flex:1;padding:8px;border:1px solid #ccc;border-radius:6px">
-      <input id="p_icon" placeholder="Icon filename (e.g., tomato.png)" style="width:240px;padding:8px;border:1px solid #ccc;border-radius:6px">
-      <button id="add" class="btn">Add</button>
-    </div>
+<div id="admin-nav-placeholder"></div>
+<script src="/admin-header.js"></script>
 
-    <div id="list">Loading...</div>
+<main class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-16">
+  <div class="mb-6">
+    <h1 class="text-3xl font-extrabold text-white tracking-tight">Product <span class="gradient-text">Catalog</span></h1>
+    <p class="mt-1 text-slate-400 text-sm">Add, remove or toggle availability of products on Buy/Sell.</p>
+  </div>
+
+  <div class="glass-panel rounded-3xl p-8 mb-6">
+    <h2 class="text-base font-semibold text-slate-300 mb-4 flex items-center gap-2"><i class="fa-solid fa-plus text-emerald-400 fa-sm"></i>Add Product</h2>
+    <div class="flex flex-col sm:flex-row gap-3">
+      <input id="p_name" placeholder="Product name" class="agri-input flex-1 px-4 py-3 rounded-xl text-sm">
+      <input id="p_icon" placeholder="Icon filename (e.g., tomato.png)" class="agri-input px-4 py-3 rounded-xl text-sm sm:w-64">
+      <button id="add" class="px-5 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5 transition-all flex items-center gap-2 whitespace-nowrap">
+        <i class="fa-solid fa-plus fa-sm"></i> Add
+      </button>
     </div>
   </div>
+
+  <div class="glass-panel rounded-3xl p-6">
+    <div id="list" class="text-slate-400 text-sm">Loading...</div>
+  </div>
+</main>
 
 <script>
 async function api(path, opts){
@@ -40,15 +55,29 @@ async function api(path, opts){
 
 async function load(){
   const wrap = document.getElementById('list');
-  wrap.innerHTML = 'Loading...';
+  wrap.innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
   const r = await api('/admin/api/products');
-  if(!r.success){ wrap.innerHTML = '<div class="muted">Failed to load</div>'; return }
+  if(!r.success){ wrap.innerHTML = '<div class="text-slate-500 text-sm">Failed to load</div>'; return }
   const products = r.products || [];
-  if(!products.length){ wrap.innerHTML = '<div class="muted">No products yet.</div>'; return }
+  if(!products.length){ wrap.innerHTML = '<div class="text-slate-500 text-sm italic">No products yet.</div>'; return }
   const rows = products.map(p=>{
-    return `<tr data-id="${p.id}"><td>${p.id}</td><td>${p.name}</td><td>${p.icon||''}</td><td>${p.available?'<span style="color:green">Available</span>':'<span style="color:#888">Hidden</span>'}</td><td><button class="btn btn-toggle btn-small">Toggle</button> <button class="btn btn-del btn-small">Delete</button></td></tr>`;
+    const badge = p.available
+      ? '<span style="padding:2px 9px;border-radius:999px;background:rgba(16,185,129,.15);color:#34d399;font-size:10px;font-weight:600">Available</span>'
+      : '<span style="padding:2px 9px;border-radius:999px;background:rgba(255,255,255,.07);color:#64748b;font-size:10px;font-weight:600">Hidden</span>';
+    return `<tr data-id="${p.id}">
+      <td class="text-slate-500">${p.id}</td>
+      <td class="font-medium text-slate-200">${p.name}</td>
+      <td class="text-slate-500">${p.icon||'—'}</td>
+      <td>${badge}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn-toggle" style="padding:5px 10px;border-radius:7px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.25);color:#34d399;font-size:11px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif"><i class="fa-solid fa-toggle-on fa-xs"></i> Toggle</button>
+          <button class="btn-del" style="padding:5px 10px;border-radius:7px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.25);color:#f87171;font-size:11px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif"><i class="fa-solid fa-trash fa-xs"></i> Del</button>
+        </div>
+      </td>
+    </tr>`;
   }).join('');
-  wrap.innerHTML = `<table class="admin-table"><thead><tr><th>ID</th><th>Name</th><th>Icon</th><th>Available</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table>`;
+  wrap.innerHTML = `<div class="overflow-x-auto"><table class="agri-table"><thead><tr><th>ID</th><th>Name</th><th>Icon</th><th>Status</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 
   document.querySelectorAll('.btn-del').forEach(b=>b.addEventListener('click', async (e)=>{
     const id = e.target.closest('tr').getAttribute('data-id');
