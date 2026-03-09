@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AgriAI-360 | Profile</title>
+    <link rel="icon" type="image/png" href="/icons/logo.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -16,6 +17,15 @@
     .info-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:14px}
     .info-label{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
     .info-value{font-size:14px;color:#e2e8f0;font-weight:500;margin-top:2px}
+    .agri-input{width:100%;padding:12px 14px;border-radius:12px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9!important;font-size:14px;font-family:'Poppins',sans-serif;outline:none;transition:border-color .2s,box-shadow .2s}
+    .agri-input:focus{border-color:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.15)}
+    .agri-input::placeholder{color:rgba(255,255,255,.3)}
+    .btn-primary{padding:12px 18px;border-radius:12px;background:linear-gradient(135deg,#10b981,#0ea5e9);color:#fff;border:none;font-weight:600;font-size:14px;cursor:pointer;font-family:'Poppins',sans-serif;transition:box-shadow .2s,transform .15s;box-shadow:0 4px 20px rgba(16,185,129,.25)}
+    .btn-primary:hover{box-shadow:0 6px 28px rgba(16,185,129,.4);transform:translateY(-1px)}
+    .msg{font-size:13px;margin-top:12px;padding:10px 14px;border-radius:10px;display:none}
+    .msg.show{display:block}
+    .msg.ok{background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.25);color:#6ee7b7}
+    .msg.err{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.25);color:#fca5a5}
   </style>
 </head>
 <body class="bg-slate-900 min-h-screen text-slate-100">
@@ -69,6 +79,24 @@
     </div>
   </div>
 
+  <div class="glass-panel rounded-3xl p-6 sm:p-8 mt-6">
+    <div class="flex items-center justify-between gap-3 mb-5">
+      <div>
+        <h2 class="text-lg font-bold text-white">Update profile</h2>
+        <p class="text-slate-500 text-sm">Save your details once and they will appear above.</p>
+      </div>
+      <button id="save-profile" class="btn-primary" type="button">Save Profile</button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <input id="form-name" class="agri-input" type="text" placeholder="Full name">
+      <input id="form-phone" class="agri-input" type="text" placeholder="Phone number">
+      <input id="form-city" class="agri-input" type="text" placeholder="City">
+      <input id="form-pincode" class="agri-input" type="text" placeholder="Pincode">
+      <textarea id="form-address" class="agri-input sm:col-span-2 min-h-28 resize-y" placeholder="Address"></textarea>
+    </div>
+    <div id="profile-msg" class="msg"></div>
+  </div>
+
   <!-- Quick link to orders -->
   <a href="/buy-sell" class="mt-4 flex items-center justify-center gap-2 glass-panel rounded-2xl p-4 text-emerald-400 font-semibold text-sm hover:border-emerald-500/30 transition-colors" style="text-decoration:none">
     <i class="fa-solid fa-receipt"></i> View My Orders
@@ -76,6 +104,108 @@
 </main>
 
 <script>
+function profilePayloadFromInfo(info){
+  const profile=info.profile||{};
+  return {
+    name: profile.name || info.name || '',
+    phone: profile.phone || info.phone || '',
+    address: profile.address || info.address || '',
+    city: profile.city || info.city || '',
+    pincode: profile.pincode || info.pincode || ''
+  };
+}
+
+function setMsg(text,type='ok'){
+  const el=document.getElementById('profile-msg');
+  el.textContent=text;
+  el.className='msg show '+type;
+}
+
+function clearMsg(){
+  const el=document.getElementById('profile-msg');
+  el.textContent='';
+  el.className='msg';
+}
+
+function fillProfileUi(email, profile){
+  const safeEmail=email||'';
+  const name=profile.name||'';
+  document.getElementById('avatar').textContent=(safeEmail[0]||'U').toUpperCase();
+  document.getElementById('display-name').textContent=name||safeEmail.split('@')[0]||'User';
+  document.getElementById('display-email').textContent=safeEmail;
+
+  document.getElementById('info-email').textContent=safeEmail||'—';
+  document.getElementById('info-name').textContent=name||'—';
+  document.getElementById('info-phone').textContent=profile.phone||'—';
+  document.getElementById('info-address').textContent=profile.address||'—';
+  document.getElementById('info-city').textContent=profile.city||'—';
+  document.getElementById('info-pincode').textContent=profile.pincode||'—';
+
+  document.getElementById('form-name').value=name;
+  document.getElementById('form-phone').value=profile.phone||'';
+  document.getElementById('form-address').value=profile.address||'';
+  document.getElementById('form-city').value=profile.city||'';
+  document.getElementById('form-pincode').value=profile.pincode||'';
+}
+
+function formPayload(){
+  return {
+    name:document.getElementById('form-name').value.trim(),
+    phone:document.getElementById('form-phone').value.trim(),
+    address:document.getElementById('form-address').value.trim(),
+    city:document.getElementById('form-city').value.trim(),
+    pincode:document.getElementById('form-pincode').value.trim()
+  };
+}
+
+async function saveProfile(showSuccess=true){
+  const profile=formPayload();
+  const res=await fetch('/api/user/profile',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({profile})
+  });
+  const data=await res.json();
+  if(!res.ok||!data.success){
+    throw new Error(data.message||'Failed to save profile');
+  }
+  try{
+    localStorage.setItem('agri_profile',JSON.stringify({email:data.user.email,...profile}));
+  }catch(e){}
+  fillProfileUi(data.user.email, profilePayloadFromInfo(data.user.info||{}));
+  if(showSuccess){
+    setMsg('Profile saved successfully.','ok');
+  }
+  return data;
+}
+
+async function syncLocalProfileIfNeeded(email, profile){
+  const missing=!profile.name&&!profile.phone&&!profile.address&&!profile.city&&!profile.pincode;
+  if(!missing){
+    return profile;
+  }
+  try{
+    const raw=localStorage.getItem('agri_profile');
+    if(!raw){
+      return profile;
+    }
+    const local=JSON.parse(raw);
+    if(!local||local.email!==email){
+      return profile;
+    }
+    document.getElementById('form-name').value=local.name||'';
+    document.getElementById('form-phone').value=local.phone||'';
+    document.getElementById('form-address').value=local.address||'';
+    document.getElementById('form-city').value=local.city||'';
+    document.getElementById('form-pincode').value=local.pincode||'';
+    const saved=await saveProfile(false);
+    return profilePayloadFromInfo(saved.user.info||{});
+  }catch(e){
+    console.error(e);
+    return profile;
+  }
+}
+
 async function loadProfile(){
   try{
     const u=await(await fetch('/api/user')).json();
@@ -86,24 +216,22 @@ async function loadProfile(){
     }
     const email=u.user.email||'';
     const info=u.user.info||{};
-    const profile=info.profile||{};
-    const name=profile.name||info.name||'';
-
-    document.getElementById('avatar').textContent=email[0].toUpperCase();
-    document.getElementById('display-name').textContent=name||email.split('@')[0];
-    document.getElementById('display-email').textContent=email;
-
-    document.getElementById('info-email').textContent=email||'—';
-    document.getElementById('info-name').textContent=name||'—';
-    document.getElementById('info-phone').textContent=profile.phone||info.phone||'—';
-    document.getElementById('info-address').textContent=profile.address||info.address||'—';
-    document.getElementById('info-city').textContent=profile.city||info.city||'—';
-    document.getElementById('info-pincode').textContent=profile.pincode||info.pincode||'—';
+    const syncedProfile=await syncLocalProfileIfNeeded(email, profilePayloadFromInfo(info));
+    fillProfileUi(email, syncedProfile);
   }catch(e){console.error(e)}
 }
+
+document.getElementById('save-profile').addEventListener('click', async()=>{
+  clearMsg();
+  try{
+    await saveProfile(true);
+  }catch(e){
+    console.error(e);
+    setMsg(e.message||'Failed to save profile.','err');
+  }
+});
+
 loadProfile();
 </script>
-</body>
-</html>
 </body>
 </html>

@@ -713,6 +713,65 @@ def save_users(data):
 def hash_password(pw: str) -> str:
     return hashlib.sha256(pw.encode("utf-8")).hexdigest()
 
+
+PROFILE_FIELDS = ('name', 'phone', 'address', 'city', 'pincode')
+
+
+def normalize_profile_payload(profile):
+    if not isinstance(profile, dict):
+        return {}
+
+    cleaned = {}
+    for field in PROFILE_FIELDS:
+        value = profile.get(field)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            cleaned[field] = text
+    return cleaned
+
+
+def merge_user_profile(user_record, profile_updates):
+    user = dict(user_record or {})
+    merged = normalize_profile_payload(user.get('profile') or {})
+
+    for field in PROFILE_FIELDS:
+        if field not in merged:
+            existing = user.get(field)
+            if existing is not None:
+                text = str(existing).strip()
+                if text:
+                    merged[field] = text
+
+    for field, value in normalize_profile_payload(profile_updates).items():
+        merged[field] = value
+
+    if merged:
+        user['profile'] = merged
+        for field in PROFILE_FIELDS:
+            if field in merged:
+                user[field] = merged[field]
+            else:
+                user.pop(field, None)
+    else:
+        user.pop('profile', None)
+        for field in PROFILE_FIELDS:
+            user.pop(field, None)
+
+    return user
+
+
+def update_user_record(email: str, updater):
+    users_data = load_users()
+    users = users_data.setdefault('users', [])
+    for index, user in enumerate(users):
+        if user.get('email') == email:
+            users[index] = updater(dict(user))
+            save_users(users_data)
+            return users[index]
+    return None
+
 def find_user(email: str):
     # Prefer Mongo lookup when available
     try:
@@ -1284,6 +1343,9 @@ def verify_otp():
         return {"success": False, "message": "Invalid OTP"}
 
     email = session.get("otp_email")  # FIXED ⬅ correct source
+    register_password_hash = session.pop('register_password_hash', None)
+    register_profile = normalize_profile_payload(session.pop('register_profile', {}) or {})
+    session.pop('register_email', None)
     # one-time use
     session.pop('otp', None)
     session.pop('otp_email', None)
@@ -1297,10 +1359,16 @@ def verify_otp():
         return {"success": True, "role": "admin", "redirect": "/admin/dashboard"}
 
     # NORMAL LOGIN
-    exists = any(u.get("email") == email for u in users.get("users", []))
-    if not exists:
-        users.setdefault("users", []).append({"email": email})
+    existing_user = next((u for u in users.get("users", []) if u.get("email") == email), None)
+    if existing_user is None:
+        new_user = {'email': email}
+        if register_password_hash:
+            new_user['password'] = register_password_hash
+        new_user = merge_user_profile(new_user, register_profile)
+        users.setdefault("users", []).append(new_user)
         save_users(users)
+    elif register_profile:
+        update_user_record(email, lambda user: merge_user_profile(user, register_profile))
 
     session["user"] = email
     return {"success": True, "role": "user", "redirect": "/home"}
@@ -1349,6 +1417,7 @@ def register():
     data = request.json or {}
     email = data.get("email")
     password = data.get("password")
+    profile = normalize_profile_payload(data.get('profile') or {})
     if not email or not password:
         return {"success": False, "message": "email and password required"}, 400
 
@@ -1363,6 +1432,7 @@ def register():
     p_hash = hash_password(password)
     session["register_email"] = email
     session["register_password_hash"] = p_hash
+    session['register_profile'] = profile
 
     if not _email_is_configured():
         provider = _email_provider()
@@ -3631,6 +3701,20 @@ def api_user():
     return jsonify({'logged': True, 'user': {'email': user_email, 'info': urec or {}}, 'is_admin': is_admin, 'orders_count': len(user_orders)})
 
 
+@app.route('/api/user/profile', methods=['POST'])
+@login_required
+def update_profile():
+    data = request.get_json() or {}
+    profile = normalize_profile_payload(data.get('profile') or data)
+    user_email = session.get('user')
+
+    updated = update_user_record(user_email, lambda user: merge_user_profile(user, profile))
+    if not updated:
+        return jsonify({'success': False, 'message': 'User not found'}), 404
+
+    return jsonify({'success': True, 'user': {'email': user_email, 'info': updated}})
+
+
 @app.route('/auth/logout', methods=['POST'])
 def auth_logout():
     session.pop('user', None)
@@ -3980,6 +4064,10 @@ def contact_page():
 @app.route("/icons/<path:f>")
 def serve_icons(f):
     return send_from_directory("static/icons", f)
+
+@app.route('/favicon.ico')
+def serve_favicon():
+    return send_from_directory('static/icons', 'logo.png', mimetype='image/png')
 
 @app.route("/<filename>.css")
 def serve_css(filename):
