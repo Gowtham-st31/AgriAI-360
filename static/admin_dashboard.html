@@ -79,7 +79,7 @@
       <i class="fa-solid fa-clock text-orange-400"></i> Pending Listings
       <span id="pending_badge" class="inline-flex items-center justify-center min-w-[22px] h-[22px] rounded-full bg-orange-500/20 text-orange-400 text-xs font-bold px-1.5">0</span>
     </h2>
-    <p class="text-slate-400 text-sm mb-6">Review and approve seller listings before they appear on the marketplace.</p>
+    <p class="text-slate-400 text-sm mb-6">Review new seller listings and pending price change requests.</p>
     <div id="pending_list">
       <div class="text-slate-500 text-sm italic">Loading…</div>
     </div>
@@ -134,6 +134,44 @@ async function removeDeal(id){
 document.getElementById('add_deal').addEventListener('click', addDeal);
 refreshDeals();
 
+function escapeHtml(value){
+  const div = document.createElement('div');
+  div.textContent = value == null ? '' : String(value);
+  return div.innerHTML;
+}
+
+function getListingImage(item){
+  const icon = (item && item.icon ? String(item.icon).trim() : '');
+  if(icon) return icon.startsWith('/') || /^https?:\/\//i.test(icon) || /^data:/i.test(icon) ? icon : ('/icons/' + icon.replace(/^\/+/, ''));
+  return '/icons/market.png';
+}
+
+function renderPendingMeta(it){
+  const reviewType = (it.review_type || 'new-listing').toLowerCase();
+  if(reviewType === 'price-change'){
+    const req = it.price_change_request || {};
+    const reason = req.reason ? `<div style="font-size:12px;color:#94a3b8;margin-top:4px">Reason: ${escapeHtml(req.reason)}</div>` : '';
+    return `
+      <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:#64748b;margin-top:2px">
+      <span>Current Price: <span style="color:#cbd5e1">₹${escapeHtml(it.price || '')}</span></span>
+      <span>Requested Price: <span style="color:#fbbf24">₹${escapeHtml(req.requested_price || '')}</span></span>
+      <span>By: ${escapeHtml(it.user || 'anon')}</span>
+      </div>
+      ${reason}
+    `;
+  }
+
+  return `<div style="font-size:12px;color:#64748b;margin-top:2px">${escapeHtml(it.quantity || '')} kg &bull; ₹${escapeHtml(it.price || '')} &bull; By: ${escapeHtml(it.user || 'anon')}</div>`;
+}
+
+function renderPendingLabel(it){
+  const reviewType = (it.review_type || 'new-listing').toLowerCase();
+  if(reviewType === 'price-change'){
+    return '<span style="display:inline-flex;align-items:center;gap:6px;margin-bottom:6px;padding:4px 9px;border-radius:999px;background:rgba(245,158,11,.12);color:#fbbf24;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase"><i class="fa-solid fa-indian-rupee-sign fa-xs"></i>Price Change Request</span>';
+  }
+  return '<span style="display:inline-flex;align-items:center;gap:6px;margin-bottom:6px;padding:4px 9px;border-radius:999px;background:rgba(59,130,246,.12);color:#60a5fa;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase"><i class="fa-solid fa-box-open fa-xs"></i>New Listing</span>';
+}
+
 // Pending Listings Approval
 async function refreshPending(){
     const box = document.getElementById('pending_list');
@@ -146,10 +184,18 @@ async function refreshPending(){
         if(badge) badge.textContent = items.length;
         if(items.length===0){ box.innerHTML = '<div class="text-slate-500 text-sm italic">No pending listings.</div>'; return }
         box.innerHTML = '<div class="flex flex-col gap-3">' + items.map(it=>{
+            const reviewType = (it.review_type || 'new-listing').toLowerCase();
+            const title = reviewType === 'price-change'
+              ? `${escapeHtml(it.product||'Unknown')} <span style="color:#fbbf24;font-size:12px;font-weight:700">Requested price update</span>`
+              : escapeHtml(it.product||'Unknown');
             return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07)">
-                <div style="flex:1">
-                  <div style="font-weight:600;color:#e2e8f0;font-size:14px">${it.product||'Unknown'}</div>
-                  <div style="font-size:12px;color:#64748b;margin-top:2px">${it.quantity||''} kg &bull; ₹${it.price||''} &bull; By: ${it.user||'anon'}</div>
+                <div style="display:flex;align-items:flex-start;gap:12px;flex:1">
+                  <img src="${escapeHtml(getListingImage(it))}" alt="${escapeHtml(it.product||'product')}" style="width:56px;height:56px;object-fit:cover;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);flex-shrink:0" onerror="this.onerror=null;this.src='/icons/market.png'">
+                  <div style="flex:1">
+                  ${renderPendingLabel(it)}
+                  <div style="font-weight:600;color:#e2e8f0;font-size:14px">${title}</div>
+                  ${renderPendingMeta(it)}
+                  </div>
                 </div>
                 <div style="display:flex;gap:8px">
                   <button onclick="approveListing(${it.id})" style="padding:6px 14px;border-radius:8px;background:rgba(16,185,129,.15);border:1px solid rgba(16,185,129,.3);color:#34d399;font-size:12px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;white-space:nowrap"><i class="fa-solid fa-check fa-xs"></i> Approve</button>
@@ -167,7 +213,7 @@ async function approveListing(id){
     }catch(e){ alert('Request failed') }
 }
 async function rejectListing(id){
-    if(!confirm('Reject and remove this listing?')) return;
+  if(!confirm('Reject this pending request?')) return;
     try{
         const r = await fetch('/admin/api/listing/'+id+'/reject', {method:'POST', credentials:'include'});
         const j = await r.json();

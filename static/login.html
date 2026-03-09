@@ -146,6 +146,14 @@ async function postJson(url,body){
   try{return await res.json();}catch(e){return{success:false,message:'Invalid server response'}}
 }
 
+function setButtonBusy(button, busy, busyHtml, idleHtml){
+  if(!button) return;
+  button.disabled = !!busy;
+  button.style.opacity = busy ? '.7' : '';
+  button.style.pointerEvents = busy ? 'none' : '';
+  button.innerHTML = busy ? busyHtml : idleHtml;
+}
+
 // Direct password login
 document.getElementById('btn-login').addEventListener('click',async()=>{
   hideMsg();
@@ -217,6 +225,8 @@ document.getElementById('btn-forgot-verify').addEventListener('click',async()=>{
 // Signup flow
 document.getElementById('btn-signup').addEventListener('click',async()=>{
   hideMsg();
+  const btn=document.getElementById('btn-signup');
+  if(btn.disabled) return;
   const email=document.getElementById('signup-email').value.trim();
   const password=document.getElementById('signup-password').value;
   const passwordConfirm=document.getElementById('signup-password-confirm').value;
@@ -227,22 +237,38 @@ document.getElementById('btn-signup').addEventListener('click',async()=>{
   const pincode=document.getElementById('signup-pincode').value.trim();
   if(!email||!password){showMsg('Enter email and choose a password');return;}
   if(password!==passwordConfirm){showMsg('Passwords do not match');return;}
-  const r=await postJson('/auth/register',{email,password,profile:{name,phone,address,city,pincode}});
-  if(r.success){showMsg(r.message||'OTP sent','ok');document.getElementById('signup-otp-box').classList.add('show');}
-  else{showMsg(r.message||'Registration failed');}
+  setButtonBusy(btn,true,'<i class="fa-solid fa-spinner fa-spin"></i> Sending OTP...','<i class="fa-solid fa-user-plus"></i> Sign Up');
+  try{
+    const r=await postJson('/auth/register',{email,password,profile:{name,phone,address,city,pincode}});
+    if(r.success){showMsg(r.message||'OTP sent','ok');document.getElementById('signup-otp-box').classList.add('show');}
+    else{showMsg(r.message||'Registration failed');}
+  }catch(e){
+    showMsg('Network error - please try again');
+  }finally{
+    setButtonBusy(btn,false,'<i class="fa-solid fa-spinner fa-spin"></i> Sending OTP...','<i class="fa-solid fa-user-plus"></i> Sign Up');
+  }
 });
 
 document.getElementById('btn-verify-signup-otp').addEventListener('click',async()=>{
   hideMsg();
+  const btn=document.getElementById('btn-verify-signup-otp');
+  if(btn.disabled) return;
   const otp=document.getElementById('signup-otp').value.trim();
   if(!otp){showMsg('Enter OTP');return;}
-  const r=await postJson('/auth/verify_otp',{otp});
-  if(!r.success){showMsg(r.message||'OTP verify failed');return;}
+  setButtonBusy(btn,true,'<i class="fa-solid fa-spinner fa-spin"></i> Verifying...','<i class="fa-solid fa-check-double"></i> Verify & Create');
   try{
-    const profile={email:document.getElementById('signup-email').value.trim(),name:document.getElementById('signup-name').value.trim(),phone:document.getElementById('signup-phone').value.trim(),address:document.getElementById('signup-address').value.trim(),city:document.getElementById('signup-city').value.trim(),pincode:document.getElementById('signup-pincode').value.trim()};
-    localStorage.setItem('agri_profile',JSON.stringify(profile));
-  }catch(e){}
-  window.location.href=r.redirect||(r.role==='admin'?'/admin/dashboard':'/home');
+    const r=await postJson('/auth/verify_otp',{otp});
+    if(!r.success){showMsg(r.message||'OTP verify failed');return;}
+    try{
+      const profile={email:document.getElementById('signup-email').value.trim(),name:document.getElementById('signup-name').value.trim(),phone:document.getElementById('signup-phone').value.trim(),address:document.getElementById('signup-address').value.trim(),city:document.getElementById('signup-city').value.trim(),pincode:document.getElementById('signup-pincode').value.trim()};
+      localStorage.setItem('agri_profile',JSON.stringify(profile));
+    }catch(e){}
+    window.location.href=r.redirect||(r.role==='admin'?'/admin/dashboard':'/home');
+  }catch(e){
+    showMsg('Network error - please try again');
+  }finally{
+    setButtonBusy(btn,false,'<i class="fa-solid fa-spinner fa-spin"></i> Verifying...','<i class="fa-solid fa-check-double"></i> Verify & Create');
+  }
 });
 
 ['signup-otp','forgot-otp'].forEach(id=>{

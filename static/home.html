@@ -71,9 +71,6 @@
                 <a href="/market?q=grains" data-cat="grains" data-i18n="cat.grains"><i class="fa-solid fa-wheat-awn w-5 mr-1 text-emerald-400"></i>Grains</a>
                 <a href="/market?q=seeds" data-cat="seeds" data-i18n="cat.seeds"><i class="fa-solid fa-seedling w-5 mr-1 text-emerald-400"></i>Seeds</a>
             </div>
-            <hr class="border-white/10 my-4">
-            <h3 class="text-sm font-semibold text-blue-400 uppercase tracking-wider mb-2" data-i18n="sidebar.trending"><i class="fa-solid fa-fire mr-2"></i>Trending</h3>
-            <p class="text-slate-400 text-xs leading-relaxed" data-i18n="home.trending.list">Tomato • Onion • Banana • Maize</p>
         </div>
     </aside>
 
@@ -131,7 +128,7 @@
 
 <!-- Footer -->
 <footer class="text-center text-slate-600 text-xs py-8 border-t border-white/5">
-    <i class="fa-solid fa-leaf text-emerald-700 mr-1"></i> Agri360 &copy; 2024
+    <i class="fa-solid fa-leaf text-emerald-700 mr-1"></i> Agri360 &copy; 2026
 </footer>
 
 <script>
@@ -148,13 +145,19 @@
 
 // Fill product grids from marketplace API
 // helper: render items into a target grid element
+function getProductImage(item){
+    const icon = (item && item.icon ? String(item.icon).trim() : '');
+    if(icon) return icon.startsWith('/') || /^https?:\/\//i.test(icon) || /^data:/i.test(icon) ? icon : ('/icons/' + icon.replace(/^\/+/, ''));
+    return '/icons/'+(((item && item.product) || 'market').toLowerCase().replace(/\s+/g,'-')) + '.png';
+}
+
 function renderItems(targetEl, items){
     try{
         if(!items || !items.length){ targetEl.innerHTML = '<div class="muted">No items</div>'; return }
         targetEl.innerHTML = '';
         items.slice(0,8).forEach(it=>{
             const card = document.createElement('div'); card.className='product-card';
-            const img = document.createElement('img'); img.src = '/icons/'+((it.product||'market').toLowerCase().replace(/\s+/g,'-')) + '.png'; img.onerror = function(){ this.onerror=null; this.src='/icons/market.png' };
+            const img = document.createElement('img'); img.src = getProductImage(it); img.onerror = function(){ this.onerror=null; this.src='/icons/market.png' };
             const title = document.createElement('div'); title.className='product-title'; title.textContent = it.product; title.setAttribute('data-product-name', it.product || '');
             const meta = document.createElement('div'); meta.className='product-meta'; meta.textContent = (it.quantity||'') + ' kg • ' + (it.seller||'seller');
             const price = document.createElement('div'); price.className='product-price'; price.textContent = '₹' + it.price;
@@ -226,6 +229,7 @@ loadGrid(document.getElementById('recommendGrid'));
         });
     }catch(e){}
 })();
+
 </script>
 
 <!-- Floating cart quick access -->

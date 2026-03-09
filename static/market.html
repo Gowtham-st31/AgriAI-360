@@ -49,7 +49,8 @@
         <input id="commodityInput" class="agri-input w-full pl-9 pr-4 py-3 rounded-xl text-sm" placeholder="Enter commodity (Tomato, Banana, Onion...)" data-i18n="search.placeholder">
       </div>
       <button id="get-price-btn" onclick="getPrice()" class="px-5 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5 transition-all flex items-center gap-2 whitespace-nowrap" data-i18n="market.get">
-        <i class="fa-solid fa-magnifying-glass-dollar"></i> Get Prices
+        <i class="fa-solid fa-magnifying-glass-dollar" id="get-price-btn-icon"></i>
+        <span id="get-price-btn-text">Get Prices</span>
       </button>
     </div>
   </div>
@@ -62,6 +63,7 @@
   </div>
 
   <!-- AI Box -->
+  <div id="searchMeta"></div>
   <div id="aiBox"></div>
 
   <!-- Results -->
@@ -74,28 +76,113 @@
 <script>
 let MARKET_DATA = [];
 
-function getPrice() {
+const KNOWN_COMMODITIES = [
+  'Tomato', 'Onion', 'Potato', 'Banana', 'Paddy', 'Maize', 'Cotton',
+  'Groundnut', 'Sugarcane', 'Turmeric', 'Chilli', 'Coriander'
+];
+
+function normalizeCommodityToken(value) {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function resolveSingleCommodityInput(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return { value: '', error: '' };
+
+  const canonicalRaw = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(text) : text;
+  const rawNormalized = normalizeCommodityToken(canonicalRaw);
+  const knownMap = new Map(KNOWN_COMMODITIES.map(name => [normalizeCommodityToken(name), name]));
+  if (knownMap.has(rawNormalized)) {
+    return { value: knownMap.get(rawNormalized), error: '' };
+  }
+
+  const parts = text.split(/[•,;|/\n]+/).map(part => part.trim()).filter(Boolean);
+  const matches = [];
+  for (const part of parts) {
+    const canonicalPart = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(part) : part;
+    const normalizedPart = normalizeCommodityToken(canonicalPart);
+    const match = knownMap.get(normalizedPart);
+    if (match && !matches.includes(match)) {
+      matches.push(match);
+    }
+  }
+
+  if (matches.length === 1) {
+    return { value: matches[0], error: '' };
+  }
+  if (matches.length > 1) {
+    return { value: '', error: 'Search one commodity only, for example Banana.' };
+  }
+
+  return { value: canonicalRaw, error: '' };
+}
+
+function setGetPriceLoading(isLoading) {
+  const button = document.getElementById('get-price-btn');
+  const icon = document.getElementById('get-price-btn-icon');
+  const text = document.getElementById('get-price-btn-text');
+  if (!button || !icon || !text) return;
+
+  button.disabled = !!isLoading;
+  button.style.opacity = isLoading ? '.75' : '';
+  button.style.cursor = isLoading ? 'default' : '';
+  icon.className = isLoading ? 'fa-solid fa-circle-notch fa-spin' : 'fa-solid fa-magnifying-glass-dollar';
+  text.textContent = isLoading ? 'Loading...' : 'Get Prices';
+}
+
+async function getPrice() {
     const raw = document.getElementById("commodityInput").value.trim();
-    const c = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(raw) : raw;
-    if (!c) { alert("Enter a commodity name!"); return; }
+  const resolvedInput = resolveSingleCommodityInput(raw);
+  const c = resolvedInput.value;
+  if (resolvedInput.error) {
+    document.getElementById("resultBox").innerHTML = '<div class="text-amber-300 text-sm">'+resolvedInput.error+'</div>';
+    document.getElementById("aiBox").innerHTML = '';
+    document.getElementById("searchMeta").innerHTML = '';
+    return;
+  }
+  if (!c) { alert("Enter a commodity name!"); return; }
 
-    document.getElementById("resultBox").innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
-    document.getElementById("aiBox").innerHTML = "";
+  document.getElementById("commodityInput").value = c;
 
-    fetch('/price?commodity='+encodeURIComponent(c)+'&ai=1')
-        .then(res => res.json())
-        .then(data => {
-            if (!data.success) {
-                document.getElementById("resultBox").innerHTML = '<div class="text-red-400 text-sm">'+(data.msg || "Could not load data")+'</div>';
-                return;
-            }
-            MARKET_DATA = data.data;
-            displayAiSummary(data.ai);
-            displayResults(MARKET_DATA);
-        })
-        .catch(err => {
-            document.getElementById("resultBox").innerHTML = '<div class="text-red-400 text-sm">Could not connect to server</div>';
-        });
+  setGetPriceLoading(true);
+  document.getElementById("resultBox").innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
+  document.getElementById("aiBox").innerHTML = "";
+  document.getElementById("searchMeta").innerHTML = "";
+
+  try {
+    const res = await fetch('/price?commodity='+encodeURIComponent(c)+'&ai=1');
+    const data = await res.json();
+    if (!data.success) {
+      document.getElementById("resultBox").innerHTML = '<div class="text-red-400 text-sm">'+(data.msg || "Could not load data")+'</div>';
+      return;
+    }
+    MARKET_DATA = data.data;
+      displayResolvedCommodity(data.commodity);
+    displayAiSummary(data.ai);
+    displayResults(MARKET_DATA);
+  } catch (err) {
+    document.getElementById("resultBox").innerHTML = '<div class="text-red-400 text-sm">Could not connect to server</div>';
+  } finally {
+    setGetPriceLoading(false);
+  }
+}
+
+function displayResolvedCommodity(meta) {
+  const box = document.getElementById('searchMeta');
+  if (!box) return;
+  if (!meta || !meta.requested || !meta.resolved) {
+    box.innerHTML = '';
+    return;
+  }
+
+  const requested = String(meta.requested).trim();
+  const resolved = String(meta.resolved).trim();
+  if (!requested || !resolved || requested.toLowerCase() === resolved.toLowerCase()) {
+    box.innerHTML = '';
+    return;
+  }
+
+  box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">Showing results for:</b> <span class="text-white font-semibold">'+resolved+'</span></p></div>';
 }
 
 function displayAiSummary(ai) {
@@ -103,38 +190,33 @@ function displayAiSummary(ai) {
     if (!box) return;
     if (!ai) { box.innerHTML = ""; return; }
 
+  const isNumericPrice = (value) => typeof value === 'number' && Number.isFinite(value);
+
     if (ai.enabled !== true) {
         const reason = ai.reason || 'AI summary unavailable';
-        box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">AI Summary:</b> '+reason+'</p></div>';
+    const hint = ai.hint ? '<p class="mt-2 text-sm text-slate-300">'+ai.hint+'</p>' : '';
+    box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">AI Summary:</b> '+reason+'</p>'+hint+'</div>';
         return;
     }
 
     const parsed = ai.parsed || null;
     if (!parsed || typeof parsed !== 'object') {
-        box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">AI Summary:</b> Could not parse model response</p></div>';
+    const rawText = ai.raw_text ? String(ai.raw_text) : '';
+    const fallbackText = rawText || 'Could not parse model response';
+    box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">AI Summary:</b> '+fallbackText+'</p></div>';
         return;
     }
 
     const price = parsed.recommended_modal_price;
     const currency = parsed.currency || 'INR';
     const unit = parsed.unit || '100kg';
-    const rationale = parsed.rationale || '';
-    const corrected = parsed.commodity_corrected || '';
 
-    if (price === undefined || price === null || price === '') {
-        box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">AI Summary:</b> No recommended price returned</p></div>';
+    if (!isNumericPrice(price)) {
+    box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">Price:</b> Not available</p></div>';
         return;
     }
 
-    let correctedHtml = '';
-    if (corrected) {
-        const raw = document.getElementById('commodityInput').value.trim();
-        if (corrected.toLowerCase() !== raw.toLowerCase()) {
-            correctedHtml = '<p><b class="text-emerald-400">Did you mean:</b> <span class="text-white font-semibold">'+corrected+'</span></p>';
-        }
-    }
-
-    box.innerHTML = '<div class="ai-card">'+correctedHtml+'<p><b class="text-emerald-400">AI Recommended Price:</b> <span class="text-white font-bold">'+(currency === 'INR' ? '\u20B9' : '')+price+' / '+unit+'</span></p>'+(rationale ? '<p><b class="text-emerald-400">Why:</b> '+rationale+'</p>' : '')+'</div>';
+    box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">Price:</b> <span class="text-white font-bold">'+(currency === 'INR' ? '\u20B9' : '')+price+' / '+unit+'</span></p></div>';
 }
 
 function displayResults(data) {
@@ -186,14 +268,6 @@ function sortNearest() {
 // Enter key support
 document.getElementById('commodityInput').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();getPrice();}});
 
-// Auto-search from URL params
-(function(){
-  try{
-    const params=new URLSearchParams(window.location.search);
-    const q=params.get('q');
-    if(q){document.getElementById('commodityInput').value=q;getPrice();}
-  }catch(e){}
-})();
 </script>
 </body>
 </html>

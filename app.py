@@ -8,6 +8,9 @@ import io
 import json
 import smtplib
 import random
+import difflib
+import html
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import time
 import ssl
@@ -20,7 +23,7 @@ from functools import wraps  # 🔥 FIXED
 import socket                # 🔥 moved here
 import inspect
 import hashlib
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound
 from apscheduler.schedulers.background import BackgroundScheduler
 
 # ================== SMTP Mail Config ==================
@@ -800,20 +803,112 @@ def get_orders_collection():
 def get_today_deals_collection():
     return mongo_db.get_collection('today_deals') if mongo_db is not None else None
 
+
+def _normalize_icon_path(icon_value):
+    text = str(icon_value or '').strip()
+    if not text:
+        return ''
+    lowered = text.lower()
+    if lowered.startswith(('http://', 'https://', 'data:')):
+        return text
+    if text.startswith('/icons/') or text.startswith('/api/'):
+        return text
+    return f"/icons/{text.lstrip('/')}"
+
+
+def _sanitize_order_record(order, include_image=False):
+    if not isinstance(order, dict):
+        return order
+    out = {k: v for k, v in order.items() if k != '_id'}
+    if 'icon' in out:
+        out['icon'] = _normalize_icon_path(out.get('icon'))
+    if not include_image:
+        out.pop('image_data', None)
+        out.pop('image_mime', None)
+    return out
+
+
+def _listing_image_endpoint(listing_id) -> str:
+    return f'/api/listing/{int(listing_id)}/image'
+
+
+def get_order_by_id(order_id, include_image=False):
+    try:
+        oid = int(order_id)
+    except Exception:
+        return None
+
+    try:
+        coll = get_orders_collection()
+        if coll is not None:
+            projection = {'_id': 0} if include_image else {'_id': 0, 'image_data': 0, 'image_mime': 0}
+            doc = coll.find_one({'id': oid}, projection)
+            if doc:
+                return _sanitize_order_record(doc, include_image=include_image)
+    except Exception as e:
+        print('get_order_by_id -> mongo error:', e)
+
+    orders_file = os.path.join(os.path.dirname(__file__), 'data', 'orders.json')
+    try:
+        with open(orders_file, 'r', encoding='utf-8') as f:
+            orders = json.load(f)
+    except Exception:
+        orders = []
+
+    for order in orders:
+        try:
+            if int(order.get('id', 0)) == oid:
+                return _sanitize_order_record(order, include_image=include_image)
+        except Exception:
+            continue
+    return None
+
+
+def _delete_listing_icon_assets(order):
+    if not isinstance(order, dict):
+        return
+    icon = str(order.get('icon') or '').strip()
+    if not icon.startswith('/icons/'):
+        return
+    try:
+        filename = os.path.basename(icon)
+        if not filename:
+            return
+        path = os.path.join(os.path.dirname(__file__), 'static', 'icons', filename)
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception as e:
+        print('delete listing icon asset error:', e)
+
+
+def _apply_terminal_listing_state(order_id, *, status=None):
+    order = get_order_by_id(order_id, include_image=True)
+    if not order or (order.get('type') or 'sell').lower() != 'sell':
+        return False
+    updates = {}
+    unset_fields = ['image_data', 'image_mime']
+    if status:
+        updates['status'] = status
+    if str(order.get('icon') or '').startswith(_listing_image_endpoint(order_id)):
+        unset_fields.append('icon')
+    ok = update_order_by_id(order_id, updates, unset_fields=unset_fields)
+    _delete_listing_icon_assets(order)
+    return ok
+
 def read_orders():
     # Return list of orders from Mongo or fallback file
     try:
         coll = get_orders_collection()
         if coll is not None:
-            docs = list(coll.find({}, {'_id': 0}))
-            return docs
+            docs = list(coll.find({}, {'_id': 0, 'image_data': 0, 'image_mime': 0}))
+            return [_sanitize_order_record(doc) for doc in docs]
     except Exception as e:
         print('read_orders -> mongo error:', e)
 
     orders_file = os.path.join(os.path.dirname(__file__), 'data', 'orders.json')
     try:
         with open(orders_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            return [_sanitize_order_record(order) for order in json.load(f)]
     except Exception:
         return []
 
@@ -968,10 +1063,12 @@ def adjust_product_quantity(product_name, amount):
     return None
 
 def delete_order_by_id(order_id):
+    order = get_order_by_id(order_id, include_image=True)
     try:
         coll = get_orders_collection()
         if coll is not None:
             coll.delete_one({'id': order_id})
+            _delete_listing_icon_assets(order)
             return True
     except Exception as e:
         print('delete_order_by_id -> mongo error:', e)
@@ -985,15 +1082,22 @@ def delete_order_by_id(order_id):
     new_orders = [o for o in orders if int(o.get('id', 0)) != int(order_id)]
     with open(orders_file, 'w', encoding='utf-8') as f:
         json.dump(new_orders, f, indent=2)
+    _delete_listing_icon_assets(order)
     return True
 
-def update_order_by_id(order_id, updates: dict):
+def update_order_by_id(order_id, updates: dict, unset_fields=None):
+    unset_fields = [field for field in (unset_fields or []) if field]
     try:
         coll = get_orders_collection()
         if coll is not None:
             # only set provided fields
             set_doc = {k: v for k, v in updates.items()}
-            res = coll.update_one({'id': order_id}, {'$set': set_doc})
+            ops = {}
+            if set_doc:
+                ops['$set'] = set_doc
+            if unset_fields:
+                ops['$unset'] = {field: '' for field in unset_fields}
+            res = coll.update_one({'id': order_id}, ops)
             return res.modified_count > 0
     except Exception as e:
         print('update_order_by_id -> mongo error:', e)
@@ -1009,6 +1113,8 @@ def update_order_by_id(order_id, updates: dict):
         if int(o.get('id', 0)) == int(order_id):
             for k, v in updates.items():
                 o[k] = v
+            for field in unset_fields:
+                o.pop(field, None)
             changed = True
             break
     if changed:
@@ -1020,6 +1126,111 @@ import smtplib
 from email.mime.text import MIMEText
 import os
 import requests
+
+
+def _email_escape(value) -> str:
+    return html.escape('' if value is None else str(value))
+
+
+def _email_format_currency(value) -> str:
+    if value is None or value == '':
+        return 'Not available'
+    try:
+        amount = float(value)
+        if amount.is_integer():
+            return f'Rs {int(amount)}'
+        return f'Rs {amount:.2f}'
+    except Exception:
+        return str(value)
+
+
+def _email_format_quantity(value) -> str:
+    if value is None or value == '':
+        return 'Not available'
+    try:
+        quantity = float(value)
+        if quantity.is_integer():
+            return f'{int(quantity)} kg'
+        return f'{quantity:.2f} kg'
+    except Exception:
+        return str(value)
+
+
+def _email_format_timestamp(value) -> str:
+    if value is None or value == '':
+        return 'Not available'
+    try:
+        return datetime.fromtimestamp(float(value)).strftime('%d %b %Y, %I:%M %p')
+    except Exception:
+        return str(value)
+
+
+def _build_rich_email_content(title: str, message: str, details=None, badge: str = '', accent: str = 'green'):
+    palette = {
+        'green': {'solid': '#10b981', 'soft': '#ecfdf5', 'dark': '#064e3b'},
+        'blue': {'solid': '#3b82f6', 'soft': '#eff6ff', 'dark': '#1e3a8a'},
+        'amber': {'solid': '#f59e0b', 'soft': '#fffbeb', 'dark': '#92400e'},
+        'red': {'solid': '#ef4444', 'soft': '#fef2f2', 'dark': '#991b1b'},
+    }
+    colors = palette.get((accent or 'green').lower(), palette['green'])
+    detail_rows = []
+    for label, value in (details or []):
+        if value is None or value == '':
+            continue
+        detail_rows.append(
+            f"""
+            <tr>
+              <td style=\"padding:10px 12px;border-bottom:1px solid #e2e8f0;color:#64748b;font-size:13px;font-weight:600;width:34%\">{_email_escape(label)}</td>
+              <td style=\"padding:10px 12px;border-bottom:1px solid #e2e8f0;color:#0f172a;font-size:13px\">{_email_escape(value)}</td>
+            </tr>
+            """
+        )
+    details_html = ''
+    if detail_rows:
+        details_html = (
+            "<div style=\"margin-top:24px;background:#ffffff;border:1px solid #e2e8f0;border-radius:18px;overflow:hidden\">"
+            "<div style=\"padding:14px 18px;background:#f8fafc;color:#0f172a;font-size:14px;font-weight:700\">Details</div>"
+            "<table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" style=\"width:100%;border-collapse:collapse\">"
+            + ''.join(detail_rows) +
+            "</table></div>"
+        )
+    badge_html = ''
+    if badge:
+        badge_html = f"<div style=\"display:inline-block;padding:8px 14px;border-radius:999px;background:{colors['soft']};color:{colors['dark']};font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase\">{_email_escape(badge)}</div>"
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+  <body style=\"margin:0;padding:0;background:#e2e8f0;font-family:Arial,sans-serif;color:#0f172a\">
+    <div style=\"padding:28px 12px\">
+      <div style=\"max-width:640px;margin:0 auto;background:linear-gradient(135deg,#0f172a 0%,#1e293b 65%,{colors['dark']} 100%);border-radius:28px;overflow:hidden;box-shadow:0 18px 48px rgba(15,23,42,.28)\">
+        <div style=\"padding:34px 32px 26px;color:#ffffff\">
+          <div style=\"font-size:14px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#cbd5e1;margin-bottom:14px\">AgriAI360</div>
+          {badge_html}
+          <h1 style=\"margin:18px 0 10px;font-size:30px;line-height:1.2\">{_email_escape(title)}</h1>
+          <p style=\"margin:0;color:#e2e8f0;font-size:15px;line-height:1.7\">{_email_escape(message)}</p>
+        </div>
+        <div style=\"background:#f8fafc;padding:28px 26px 30px\">
+          <div style=\"background:linear-gradient(135deg,#ffffff 0%,{colors['soft']} 100%);border:1px solid rgba(148,163,184,.22);border-radius:22px;padding:20px 22px\">
+            <div style=\"font-size:15px;font-weight:700;color:{colors['dark']};margin-bottom:6px\">Status Update</div>
+            <div style=\"font-size:13px;line-height:1.7;color:#334155\">Please review the latest information below.</div>
+            {details_html}
+          </div>
+          <div style=\"margin-top:22px;font-size:12px;line-height:1.7;color:#64748b\">This is an automated AgriAI360 notification about your marketplace activity.</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>"""
+
+    text_lines = [title, '', message]
+    if details:
+        text_lines.extend(['', 'Details:'])
+        for label, value in details:
+            if value is None or value == '':
+                continue
+            text_lines.append(f'- {label}: {value}')
+    text_lines.extend(['', 'AgriAI360'])
+    return {'text': '\n'.join(text_lines), 'html': html_body}
 
 
 def _smtp_is_configured() -> bool:
@@ -1038,6 +1249,26 @@ def _email_provider() -> str:
     return (os.getenv('EMAIL_PROVIDER') or 'auto').strip().lower()
 
 
+def _resolve_email_provider() -> str:
+    configured = []
+    if _brevo_is_configured():
+        configured.append('brevo')
+    if _smtp_is_configured():
+        configured.append('smtp')
+
+    provider = _email_provider()
+    if provider in ('smtp', 'brevo'):
+        return provider if provider in configured else ''
+
+    # In auto mode choose one provider only. Prefer Brevo because it is the
+    # currently used branded transactional sender for this app.
+    if 'brevo' in configured:
+        return 'brevo'
+    if 'smtp' in configured:
+        return 'smtp'
+    return ''
+
+
 def _email_hint_for_provider(provider: str) -> str:
     p = (provider or '').strip().lower() or 'auto'
     if p == 'smtp':
@@ -1048,13 +1279,7 @@ def _email_hint_for_provider(provider: str) -> str:
 
 
 def _email_is_configured() -> bool:
-    p = _email_provider()
-    if p == 'smtp':
-        return _smtp_is_configured()
-    if p == 'brevo':
-        return _brevo_is_configured()
-    # auto
-    return _smtp_is_configured() or _brevo_is_configured()
+    return bool(_resolve_email_provider())
 
 
 def _smtp_timeout_seconds() -> float:
@@ -1072,7 +1297,20 @@ def _send_otp_smtp(receiver_email: str, otp: str) -> bool:
     if not sender_email or not app_password:
         raise RuntimeError("SMTP not configured: set EMAIL_USER and EMAIL_PASS")
 
-    msg = MIMEText(f"Your OTP is {otp}")
+    otp_email = _build_rich_email_content(
+        'OTP Verification',
+        'Use the one-time password below to continue your AgriAI360 sign in or registration.',
+        details=[
+            ('OTP Code', otp),
+            ('Valid For', '10 minutes'),
+            ('Email', receiver_email),
+        ],
+        badge='Secure Access',
+        accent='blue',
+    )
+    msg = MIMEMultipart('alternative')
+    msg.attach(MIMEText(otp_email['text'], 'plain'))
+    msg.attach(MIMEText(otp_email['html'], 'html'))
     msg["Subject"] = "OTP Verification"
     msg["From"] = sender_email
     msg["To"] = receiver_email
@@ -1123,7 +1361,28 @@ def _send_otp_brevo(receiver_email: str, otp: str) -> bool:
             {'email': receiver_email},
         ],
         'subject': 'OTP Verification',
-        'textContent': f'Your OTP is {otp}',
+        'textContent': _build_rich_email_content(
+            'OTP Verification',
+            'Use the one-time password below to continue your AgriAI360 sign in or registration.',
+            details=[
+                ('OTP Code', otp),
+                ('Valid For', '10 minutes'),
+                ('Email', receiver_email),
+            ],
+            badge='Secure Access',
+            accent='blue',
+        )['text'],
+        'htmlContent': _build_rich_email_content(
+            'OTP Verification',
+            'Use the one-time password below to continue your AgriAI360 sign in or registration.',
+            details=[
+                ('OTP Code', otp),
+                ('Valid For', '10 minutes'),
+                ('Email', receiver_email),
+            ],
+            badge='Secure Access',
+            accent='blue',
+        )['html'],
     }
 
     headers = {
@@ -1154,33 +1413,15 @@ def send_otp(receiver_email, otp):
     Providers:
       - smtp: Gmail SMTP (TLS 587)
       - brevo: Brevo Transactional Email API
-            - auto: try smtp -> brevo
+            - auto: choose one configured provider only
     """
-    provider = _email_provider()
+    provider = _resolve_email_provider()
     if provider == 'smtp':
         return _send_otp_smtp(receiver_email, otp)
     if provider == 'brevo':
         return _send_otp_brevo(receiver_email, otp)
 
-    # auto fallback (SMTP first, as requested)
-    errors = []
-    if _smtp_is_configured():
-        try:
-            return _send_otp_smtp(receiver_email, otp)
-        except Exception as e:
-            errors.append(('smtp', e))
-    if _brevo_is_configured():
-        try:
-            return _send_otp_brevo(receiver_email, otp)
-        except Exception as e:
-            errors.append(('brevo', e))
-
-    if not errors:
-        raise RuntimeError('No email provider configured. Set EMAIL_PROVIDER and credentials.')
-
-    summary = '; '.join([f"{name}={type(err).__name__}" for name, err in errors])
-    # keep details in server logs; raise a short message
-    raise RuntimeError(f'All email providers failed ({summary})')
+    raise RuntimeError('No email provider configured. Set EMAIL_PROVIDER and credentials.')
 
 
 def send_otp_email(email, otp):
@@ -1206,17 +1447,17 @@ def send_otp_email_async(email, otp):
     return True
 
 
-def _send_notification_email(to_email: str, subject: str, body: str):
+def _send_notification_email(to_email: str, subject: str, body: str, html_body: str = None):
     """Send a generic notification email (non-OTP) using configured provider."""
     if not _email_is_configured():
         print('[NOTIFY] Email not configured, skipping notification')
         return
 
-    provider = _email_provider()
+    provider = _resolve_email_provider()
 
     def _send():
         try:
-            if provider == 'brevo' or (provider == 'auto' and _brevo_is_configured()):
+            if provider == 'brevo':
                 api_key = (os.getenv('BREVO_API_KEY') or '').strip()
                 from_email = (os.getenv('BREVO_FROM') or '').strip()
                 sender_name = (os.getenv('BREVO_SENDER_NAME') or 'AgriAI360').strip() or 'AgriAI360'
@@ -1226,6 +1467,8 @@ def _send_notification_email(to_email: str, subject: str, body: str):
                     'subject': subject,
                     'textContent': body,
                 }
+                if html_body:
+                    payload['htmlContent'] = html_body
                 headers = {
                     'accept': 'application/json',
                     'content-type': 'application/json',
@@ -1236,10 +1479,15 @@ def _send_notification_email(to_email: str, subject: str, body: str):
                     print(f'[NOTIFY] Brevo email sent to {to_email}')
                 else:
                     print(f'[NOTIFY] Brevo failed status={resp.status_code}')
-            elif provider == 'smtp' or (provider == 'auto' and _smtp_is_configured()):
+            elif provider == 'smtp':
                 sender_email = (os.getenv("EMAIL_USER") or "").strip()
                 app_password = (os.getenv("EMAIL_PASS") or "").strip().replace(" ", "")
-                msg = MIMEText(body)
+                if html_body:
+                    msg = MIMEMultipart('alternative')
+                    msg.attach(MIMEText(body, 'plain'))
+                    msg.attach(MIMEText(html_body, 'html'))
+                else:
+                    msg = MIMEText(body)
                 msg["Subject"] = subject
                 msg["From"] = sender_email
                 msg["To"] = to_email
@@ -1567,6 +1815,34 @@ def place_order():
     if not all(k in data for k in required):
         return jsonify({'success': False, 'message': 'Missing fields'}), 400
 
+    order_type = (data.get('type') or '').lower()
+    requested_quantity = data.get('quantity')
+    try:
+        requested_quantity_num = float(requested_quantity)
+    except Exception:
+        requested_quantity_num = None
+    if requested_quantity_num is None or requested_quantity_num <= 0:
+        return jsonify({'success': False, 'message': 'Quantity must be greater than zero'}), 400
+
+    if order_type == 'buy':
+        listing_id = data.get('listing_id')
+        if listing_id is not None:
+            try:
+                target_listing = get_order_by_id(int(listing_id), include_image=False)
+            except Exception:
+                target_listing = None
+            if not target_listing or (target_listing.get('type') or 'sell').lower() != 'sell':
+                return jsonify({'success': False, 'message': 'Listing not found'}), 404
+            if (target_listing.get('status') or '').lower() != 'approved':
+                return jsonify({'success': False, 'message': 'This listing is not currently available'}), 400
+            try:
+                available_quantity_num = float(target_listing.get('quantity'))
+            except Exception:
+                available_quantity_num = None
+            if available_quantity_num is not None and requested_quantity_num > available_quantity_num:
+                available_label = int(available_quantity_num) if float(available_quantity_num).is_integer() else round(available_quantity_num, 2)
+                return jsonify({'success': False, 'message': f'Only {available_label} kg is available for this product'}), 400
+
     order = {
         'id': int(time.time() * 1000),
         'user': session.get('user'),
@@ -1626,7 +1902,7 @@ def place_order():
                                 new_qty = max(0, existing_num - qnum)
                                 # if zero, remove the listing; otherwise update quantity
                                 if new_qty <= 0:
-                                    delete_order_by_id(target.get('id'))
+                                    _apply_terminal_listing_state(target.get('id'), status='completed')
                                     print(f"[MARKET] Listing {target.get('id')} sold out and removed (bought {qnum})")
                                 else:
                                     update_order_by_id(target.get('id'), {'quantity': new_qty})
@@ -1675,6 +1951,8 @@ def marketplace():
     if request.method == 'POST':
         # Support both JSON and multipart/form-data (file upload from seller page).
         image_filename = None
+        image_bytes = None
+        image_mime = None
         if request.files and 'image' in request.files:
             form = request.form
             product = (form.get('product') or '').strip()
@@ -1685,19 +1963,20 @@ def marketplace():
             contact = form.get('contact') or form.get('seller')
 
             image_file = request.files.get('image')
-            # Save uploaded image to static/icons using the same slug rule the frontend uses:
-            # js: (product||'market').toLowerCase().replace(/\s+/g,'-') + '.png'
             try:
-                slug = re.sub(r"\s+", "-", (product or 'market').strip().lower())
-                # Prevent directory traversal
-                slug = slug.replace('/', '').replace('\\', '')
-                fname = f"{slug}.png"
-                icons_dir = os.path.join(os.path.dirname(__file__), 'static', 'icons')
-                os.makedirs(icons_dir, exist_ok=True)
-                save_path = os.path.join(icons_dir, fname)
-                image_file.save(save_path)
-                image_filename = fname
-                print(f"Saved uploaded image for product='{product}' -> /icons/{fname}")
+                image_bytes = image_file.read() if image_file is not None else None
+                image_mime = (getattr(image_file, 'mimetype', None) or 'image/png').strip() or 'image/png'
+                if image_bytes and mongo_db is None:
+                    slug = re.sub(r"\s+", "-", (product or 'market').strip().lower())
+                    slug = slug.replace('/', '').replace('\\', '')
+                    fname = f"{slug}.png"
+                    icons_dir = os.path.join(os.path.dirname(__file__), 'static', 'icons')
+                    os.makedirs(icons_dir, exist_ok=True)
+                    save_path = os.path.join(icons_dir, fname)
+                    with open(save_path, 'wb') as fh:
+                        fh.write(image_bytes)
+                    image_filename = fname
+                    print(f"Saved uploaded image for product='{product}' -> /icons/{fname}")
             except Exception as e:
                 print('Failed to save uploaded image:', e)
 
@@ -1737,8 +2016,11 @@ def marketplace():
             'timestamp': time.time()
         }
 
-        # If we saved an image, include the icon path so clients can reference it explicitly
-        if image_filename:
+        if image_bytes and mongo_db is not None:
+            listing['image_data'] = base64.b64encode(image_bytes).decode('ascii')
+            listing['image_mime'] = image_mime or 'image/png'
+            listing['icon'] = _listing_image_endpoint(new_id)
+        elif image_filename:
             listing['icon'] = f"/icons/{image_filename}"
 
         # Persist listing
@@ -1832,7 +2114,7 @@ def marketplace():
 
     # Exclude listings pending admin approval from public marketplace
     try:
-        filtered = [o for o in filtered if (o.get('status') or 'approved') != 'pending']
+        filtered = [o for o in filtered if (o.get('status') or '').lower() == 'approved']
     except Exception:
         pass
 
@@ -1854,6 +2136,68 @@ def marketplace():
         })
 
     return jsonify({'success': True, 'items': out})
+
+
+@app.route('/api/listing/<int:listing_id>/image', methods=['GET'])
+def api_listing_image(listing_id):
+    listing = get_order_by_id(listing_id, include_image=True)
+    if not listing:
+        return 'Not found', 404
+
+    image_data = listing.get('image_data')
+    image_mime = (listing.get('image_mime') or 'image/png').strip() or 'image/png'
+    if not image_data:
+        return 'Not found', 404
+
+    try:
+        raw = base64.b64decode(image_data)
+    except Exception:
+        return 'Invalid image', 500
+
+    resp = make_response(raw)
+    resp.headers['Content-Type'] = image_mime
+    resp.headers['Cache-Control'] = 'public, max-age=3600'
+    return resp
+
+
+@app.route('/api/order/<int:order_id>/price-change-request', methods=['POST'])
+@login_required
+def api_request_price_change(order_id):
+    order = get_order_by_id(order_id, include_image=True)
+    if not order:
+        return jsonify({'success': False, 'message': 'Listing not found'}), 404
+
+    current_user = session.get('user')
+    if (order.get('user') or '') != current_user:
+        return jsonify({'success': False, 'message': 'Not authorized'}), 403
+    if (order.get('type') or 'sell').lower() != 'sell':
+        return jsonify({'success': False, 'message': 'Only sell listings can request price changes'}), 400
+
+    status = (order.get('status') or '').lower()
+    if status in ('completed', 'cancelled', 'rejected'):
+        return jsonify({'success': False, 'message': 'Listing is no longer active'}), 400
+
+    data = request.get_json() or {}
+    requested_price = data.get('requested_price')
+    try:
+        requested_price = float(requested_price)
+    except Exception:
+        return jsonify({'success': False, 'message': 'Valid requested_price is required'}), 400
+    if requested_price <= 0:
+        return jsonify({'success': False, 'message': 'requested_price must be greater than zero'}), 400
+
+    reason = str(data.get('reason') or '').strip()
+    request_payload = {
+        'requested_price': requested_price,
+        'reason': reason,
+        'requested_at': time.time(),
+        'status': 'pending',
+    }
+    ok = update_order_by_id(order_id, {'price_change_request': request_payload})
+    if not ok:
+        return jsonify({'success': False, 'message': 'Could not save request'}), 500
+
+    return jsonify({'success': True, 'request': request_payload})
 
 
 @app.route('/admin/api/today_deals', methods=['GET','POST','DELETE'])
@@ -2142,24 +2486,61 @@ CACHE_FILE = os.path.join(CACHE_DIR, "prices.json")
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-def load_cache():
-    # Prefer Mongo-stored cache when available
-    try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('prices')
-            doc = coll.find_one({}, {'_id': 0})
-            if doc and 'cache' in doc:
-                return doc['cache']
-    except Exception as e:
-        print('load_cache -> mongo error:', e)
 
+def _read_price_cache_file():
     if os.path.exists(CACHE_FILE):
         try:
             return json.load(open(CACHE_FILE, "r", encoding="utf-8"))
         except Exception as e:
             print("Warning: failed to read cache:", e)
-            return {"last_updated": None, "commodities": {}}
     return {"last_updated": None, "commodities": {}}
+
+
+def _merge_price_caches(primary, fallback):
+    primary = primary if isinstance(primary, dict) else {}
+    fallback = fallback if isinstance(fallback, dict) else {}
+
+    merged = {
+        'last_updated': primary.get('last_updated') or fallback.get('last_updated'),
+        'commodities': {}
+    }
+
+    primary_commodities = primary.get('commodities') or {}
+    fallback_commodities = fallback.get('commodities') or {}
+
+    for key in set(fallback_commodities.keys()) | set(primary_commodities.keys()):
+        primary_entry = primary_commodities.get(key) or {}
+        fallback_entry = fallback_commodities.get(key) or {}
+        primary_items = primary_entry.get('items') or []
+        fallback_items = fallback_entry.get('items') or []
+
+        if primary_items:
+            merged['commodities'][key] = primary_entry
+        elif fallback_items:
+            merged['commodities'][key] = fallback_entry
+        elif primary_entry:
+            merged['commodities'][key] = primary_entry
+        elif fallback_entry:
+            merged['commodities'][key] = fallback_entry
+
+    return merged
+
+def load_cache():
+    # Prefer Mongo-stored cache when available
+    mongo_cache = None
+    try:
+        if mongo_db is not None:
+            coll = mongo_db.get_collection('prices')
+            doc = coll.find_one({}, {'_id': 0})
+            if doc and 'cache' in doc:
+                mongo_cache = doc['cache']
+    except Exception as e:
+        print('load_cache -> mongo error:', e)
+
+    file_cache = _read_price_cache_file()
+    if mongo_cache is not None:
+        return _merge_price_caches(mongo_cache, file_cache)
+    return file_cache
 
 def save_cache(cache):
     # Prefer storing cache to Mongo when available
@@ -2179,6 +2560,117 @@ def save_cache(cache):
 
 def norm(c: str):
     return c.strip().lower()
+
+
+DEFAULT_COMMODITY_NAMES = [
+    'Tomato', 'Onion', 'Potato', 'Banana', 'Paddy', 'Maize', 'Cotton',
+    'Groundnut', 'Sugarcane', 'Turmeric', 'Chilli', 'Coriander'
+]
+
+
+def _commodity_lookup_key(value: str) -> str:
+    s = str(value or '').strip().lower()
+    s = re.sub(r'[^a-z0-9\s]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _display_commodity_name(value: str) -> str:
+    s = str(value or '').strip()
+    if not s:
+        return ''
+    return ' '.join(part.capitalize() for part in re.split(r'\s+', s) if part)
+
+
+def _read_json_if_exists(path, default):
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, 'r', encoding='utf-8') as fh:
+            return json.load(fh)
+    except Exception:
+        return default
+
+
+def _collect_known_commodity_candidates(cache=None):
+    candidates = {}
+
+    def add_candidate(raw_name, *, stored_key=None, display_name=None):
+        text = str(raw_name or '').strip()
+        if not text:
+            return
+        lookup_key = _commodity_lookup_key(text)
+        if not lookup_key:
+            return
+        if lookup_key in {'other', 'local', 'faq', 'medium', 'grade a'}:
+            return
+        candidates.setdefault(lookup_key, {
+            'stored_key': stored_key or norm(text),
+            'display_name': display_name or _display_commodity_name(text),
+        })
+
+    for name in DEFAULT_COMMODITY_NAMES:
+        add_candidate(name)
+
+    cache = cache or load_cache()
+    commodities = (cache.get('commodities') or {}) if isinstance(cache, dict) else {}
+    for cache_key, cache_entry in commodities.items():
+        if not ((cache_entry or {}).get('items') or []):
+            continue
+        add_candidate(cache_key, stored_key=cache_key, display_name=_display_commodity_name(cache_key))
+
+    products = _read_json_if_exists(os.path.join(CACHE_DIR, 'products.json'), {})
+    for product in (products.get('products') or []):
+        add_candidate(product.get('name'))
+
+    orders = _read_json_if_exists(os.path.join(CACHE_DIR, 'orders.json'), [])
+    for order in orders:
+        add_candidate(order.get('product'))
+
+    return candidates
+
+
+def resolve_commodity_name(raw_name: str, cache=None) -> dict:
+    requested = str(raw_name or '').strip()
+    requested_key = _commodity_lookup_key(requested)
+    result = {
+        'requested': requested,
+        'requested_key': requested_key,
+        'resolved': requested,
+        'resolved_key': norm(requested) if requested else '',
+        'match_type': 'exact',
+    }
+    if not requested_key:
+        return result
+
+    candidates = _collect_known_commodity_candidates(cache=cache)
+    exact = candidates.get(requested_key)
+    if exact:
+        result['resolved'] = exact['display_name']
+        result['resolved_key'] = exact['stored_key']
+        return result
+
+    prefix_matches = []
+    if len(requested_key) >= 3:
+        for lookup_key, meta in candidates.items():
+            if lookup_key.startswith(requested_key) or requested_key.startswith(lookup_key):
+                prefix_matches.append((lookup_key, meta))
+        if prefix_matches:
+            prefix_matches.sort(key=lambda item: (abs(len(item[0]) - len(requested_key)), item[0]))
+            match = prefix_matches[0][1]
+            result['resolved'] = match['display_name']
+            result['resolved_key'] = match['stored_key']
+            result['match_type'] = 'prefix'
+            return result
+
+    close = difflib.get_close_matches(requested_key, list(candidates.keys()), n=1, cutoff=0.72)
+    if close:
+        match = candidates[close[0]]
+        result['resolved'] = match['display_name']
+        result['resolved_key'] = match['stored_key']
+        result['match_type'] = 'fuzzy'
+
+    return result
 
 # AGMARKNET / datagov urls & headers
 AGMARKNET_SEARCH_URL = "https://agmarknet.gov.in/SearchCmmMkt.aspx?CommName={commodity}"
@@ -2260,7 +2752,10 @@ def fetch_from_agmarknet(commodity):
             r = requests.get(url, headers=HEADERS, timeout=12)
             if r.status_code != 200:
                 continue
-            soup = BeautifulSoup(r.text, "lxml")
+            try:
+                soup = BeautifulSoup(r.text, "lxml")
+            except FeatureNotFound:
+                soup = BeautifulSoup(r.text, "html.parser")
             recs = parse_price_table_from_soup(soup)
             if recs:
                 for rec in recs:
@@ -2379,6 +2874,21 @@ def _iter_unique_models(primary: str, fallbacks=None):
         yield mm
 
 
+def _iter_unique_payloads(payload_primary: dict, payload_secondary: dict = None, payload_variants=None):
+    seen = set()
+    for payload in [payload_primary, payload_secondary] + (payload_variants or []):
+        if not payload:
+            continue
+        try:
+            marker = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        except Exception:
+            marker = repr(payload)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        yield payload
+
+
 def _model_from_used_url(url: str, default_model: str = None) -> str:
     if not url:
         return (default_model or '').strip() or None
@@ -2437,6 +2947,7 @@ def _gemini_generate_content_request(
     fallback_models: list = None,
     payload_primary: dict,
     payload_secondary: dict = None,
+    payload_variants: list = None,
     timeout: int = 20,
 ):
     """POST to Gemini REST generateContent.
@@ -2457,32 +2968,53 @@ def _gemini_generate_content_request(
     for m in _iter_unique_models(primary_model, fallback_models):
         for version in ('v1', 'v1beta'):
             url = f"{base}/{version}/models/{m}:generateContent"
-            tried.append(url)
             last_url = url
-            try:
-                r = requests.post(url, params={'key': key}, json=payload_primary, timeout=timeout)
-            except Exception as e:
-                last = e
-                continue
-
-            # Some Gemini/REST variants use snake_case field names.
-            if r.status_code == 400 and payload_secondary is not None:
+            for payload in _iter_unique_payloads(payload_primary, payload_secondary, payload_variants):
+                tried.append(url)
                 try:
-                    r2 = requests.post(url, params={'key': key}, json=payload_secondary, timeout=timeout)
-                    if r2.status_code == 200 or (r2.text and not r.text):
-                        r = r2
+                    r = requests.post(url, params={'key': key}, json=payload, timeout=timeout)
                 except Exception as e:
                     last = e
                     continue
 
-            # If this model/version isn't supported, keep trying fallbacks.
-            if r.status_code == 404:
-                last = r
-                continue
+                # If this model/version isn't supported, keep trying fallbacks.
+                if r.status_code == 404:
+                    last = r
+                    break
 
-            return r, url, tried
+                if r.status_code == 400:
+                    last = r
+                    continue
+
+                return r, url, tried
 
     return last, last_url, tried
+
+
+def _gemini_market_model_name() -> str:
+    return 'gemma-3-4b-it'
+
+
+def _gemini_market_model_fallbacks() -> list:
+    return []
+
+
+def _extract_grounding_sources(candidate: dict) -> list:
+    out = []
+    seen = set()
+    metadata = (candidate or {}).get('groundingMetadata') or {}
+    for chunk in (metadata.get('groundingChunks') or []):
+        web = (chunk or {}).get('web') or {}
+        uri = (web.get('uri') or '').strip()
+        title = (web.get('title') or '').strip()
+        if not uri:
+            continue
+        key = (uri, title)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({'uri': uri, 'title': title or uri})
+    return out[:8]
 
 
 def _extract_json_from_text(text: str):
@@ -2512,6 +3044,93 @@ def _extract_json_from_text(text: str):
         except Exception:
             return None
     return None
+
+
+def _coerce_market_numeric(value):
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if re.search(r'[A-Za-z:]', text):
+        return None
+    cleaned = text.replace(',', '').strip()
+    if re.fullmatch(r'-?\d+(?:\.\d+)?', cleaned):
+        number = float(cleaned)
+        return int(number) if number.is_integer() else number
+    return None
+
+
+def _sanitize_market_ai_payload(parsed, expected_commodity: str):
+    if not isinstance(parsed, dict):
+        return None
+
+    expected = _display_commodity_name(expected_commodity)
+    corrected = str(parsed.get('commodity_corrected') or '').strip() or expected
+    lowered = corrected.lower()
+    if any(sep in corrected for sep in [',', ';', '/', '|']) or ' or ' in lowered:
+        corrected = expected
+
+    recommended_modal_price = _coerce_market_numeric(parsed.get('recommended_modal_price'))
+    price_min = _coerce_market_numeric(parsed.get('price_min'))
+    price_max = _coerce_market_numeric(parsed.get('price_max'))
+    markets_count = _coerce_market_numeric(parsed.get('markets_count'))
+
+    return {
+        'commodity_corrected': corrected,
+        'recommended_modal_price': recommended_modal_price,
+        'currency': str(parsed.get('currency') or 'INR').strip() or 'INR',
+        'unit': str(parsed.get('unit') or '100kg').strip() or '100kg',
+        'price_min': price_min,
+        'price_max': price_max,
+        'markets_count': markets_count,
+        'as_of': str(parsed.get('as_of') or '').strip(),
+        'rationale': str(parsed.get('rationale') or '').strip(),
+    }
+
+
+def _fallback_market_ai_payload(items: list, commodity: str):
+    modal_prices = []
+    min_prices = []
+    max_prices = []
+    for row in (items or []):
+        if not isinstance(row, dict):
+            continue
+        modal_value = _coerce_market_numeric(row.get('modal_price'))
+        min_value = _coerce_market_numeric(row.get('min_price'))
+        max_value = _coerce_market_numeric(row.get('max_price'))
+        if modal_value is not None:
+            modal_prices.append(modal_value)
+        if min_value is not None:
+            min_prices.append(min_value)
+        if max_value is not None:
+            max_prices.append(max_value)
+
+    if not modal_prices and not min_prices and not max_prices:
+        return None
+
+    sorted_modal = sorted(modal_prices)
+    recommended = None
+    if sorted_modal:
+        mid = len(sorted_modal) // 2
+        if len(sorted_modal) % 2 == 1:
+            recommended = sorted_modal[mid]
+        else:
+            recommended = int(round((sorted_modal[mid - 1] + sorted_modal[mid]) / 2.0))
+
+    return {
+        'commodity_corrected': _display_commodity_name(commodity),
+        'recommended_modal_price': recommended,
+        'currency': 'INR',
+        'unit': '100kg',
+        'price_min': min(min_prices) if min_prices else (min(sorted_modal) if sorted_modal else None),
+        'price_max': max(max_prices) if max_prices else (max(sorted_modal) if sorted_modal else None),
+        'markets_count': len(sorted_modal),
+        'as_of': '',
+        'rationale': '',
+    }
 
 
 def _redact_api_key(text: str, api_key: str = None) -> str:
@@ -2559,6 +3178,20 @@ def _gemini_error_payload(r):
         message = f"Gemini API error {status}" if status else "Gemini API error"
 
     hint = None
+    lower_message = message.lower()
+    if 'search as tool is not enabled' in lower_message:
+        return (
+            'Live web search is not available for gemma-3-4b-it.',
+            details,
+            'The market AI is pinned to gemma-3-4b-it, but this model cannot use the Google Search tool in the current API.'
+        )
+    if 'json mode is not enabled' in lower_message:
+        return (
+            'Structured JSON mode is not available for gemma-3-4b-it.',
+            details,
+            'This model must be called without JSON response mode. The market request has been adjusted to avoid that mode.'
+        )
+
     if status == 429:
         hint = (
             "Quota/rate-limit exceeded for this API key. "
@@ -2579,10 +3212,7 @@ def _gemini_error_payload(r):
 
 
 def gemini_live_price_summary(commodity: str, items: list, state: str = None, district: str = None, market: str = None):
-    """Use Gemini/Gemma to summarize live price rows into a single recommended price.
-
-    Note: The model cannot fetch live data itself; we pass it the scraped rows.
-    """
+    """Use Gemini/Gemma to answer a commodity price query without tool grounding."""
     cfg = _gemini_config()
     if not cfg['api_key']:
         return {
@@ -2590,8 +3220,6 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
             'reason': 'GEMINI_API_KEY (or GOOGLE_API_KEY) not configured'
         }
 
-    # Keep prompt bounded
-    items_in = items[:25] if isinstance(items, list) else []
     focus_bits = []
     if state:
         focus_bits.append(f"state={state}")
@@ -2601,53 +3229,65 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
         focus_bits.append(f"market={market}")
     focus = (', '.join(focus_bits)) if focus_bits else 'none'
 
+    sample_rows = []
+    for row in (items or [])[:5]:
+        if not isinstance(row, dict):
+            continue
+        sample_rows.append({
+            'market': row.get('market'),
+            'district': row.get('district'),
+            'state': row.get('state'),
+            'modal_price': row.get('modal_price'),
+            'arrival_date': row.get('arrival_date'),
+        })
+
     prompt = (
         "You are an agriculture market analyst. "
-        "The user searched for a commodity. Your job:\n"
-        "1. First, correct any spelling mistakes in the commodity name and identify the actual commodity.\n"
-        "2. Search the web for the CURRENT real-time mandi price of this commodity in India today. "
-        "Look for today's actual market prices from agmarknet.gov.in, commodityonline.com, "
-        "krishimaratavahini, or any reliable Indian agricultural price source.\n"
-        "3. If scraped mandi rows are also provided, cross-reference them with web data for accuracy.\n"
-        "4. Always return the CURRENT real market price from the web — not just a summary of the provided rows.\n"
+        "The user searched for exactly one commodity price. "
+        "Correct spelling mistakes in the commodity name if needed, then answer for that one commodity only. "
+        "Do not mention alternative commodities, comparisons, suggestion lists, or multiple product names. "
+        "Do not use tools. Just answer from the model directly. "
         "Use INR and unit '100kg'. "
-        "If a focus location is provided, try to find prices for that location. "
         "Return ONLY valid JSON with these keys: "
-        "commodity_corrected, recommended_modal_price, currency, unit, price_min, price_max, markets_count, as_of, rationale.\n"
+        "commodity_corrected, recommended_modal_price, currency, unit, price_min, price_max, markets_count, as_of, rationale. "
+        "recommended_modal_price must be a single number or null, never a string list. "
+        "If you are uncertain, still return JSON and explain the uncertainty in rationale.\n"
         f"User searched: {commodity}\n"
         f"Focus location: {focus}\n"
-        f"Scraped rows for reference (may be empty): {json.dumps(items_in, ensure_ascii=False)}"
+        f"Optional cached market rows for context: {json.dumps(sample_rows, ensure_ascii=False)}"
     )
 
     try:
-        payload_v1 = {
-            'contents': [
-                {'role': 'user', 'parts': [{'text': prompt}]}
-            ],
-            'tools': [{'google_search': {}}],
-            'generationConfig': {
-                'temperature': 0.2,
-                'maxOutputTokens': 512
-            }
+        generation_config = {
+            'temperature': 0.2,
+            'maxOutputTokens': 512,
         }
-        payload_v2 = {
-            'contents': [
-                {'role': 'user', 'parts': [{'text': prompt}]}
-            ],
-            'tools': [{'google_search': {}}],
-            'generation_config': {
-                'temperature': 0.2,
-                'max_output_tokens': 512
-            }
+        generation_config_snake = {
+            'temperature': 0.2,
+            'max_output_tokens': 512,
         }
 
+        payload_plain = {
+            'contents': [
+                {'role': 'user', 'parts': [{'text': prompt}]}
+            ],
+            'generationConfig': generation_config,
+        }
+        payload_plain_snake = {
+            'contents': [
+                {'role': 'user', 'parts': [{'text': prompt}]}
+            ],
+            'generation_config': generation_config_snake,
+        }
+        model_name = _gemini_market_model_name()
+        fallback_models = _gemini_market_model_fallbacks()
         r, used_url, tried_urls = _gemini_generate_content_request(
             api_base=cfg['api_base'],
             api_key=cfg['api_key'],
-            model=cfg['model'],
-            fallback_models=cfg.get('fallback_models') or [],
-            payload_primary=payload_v1,
-            payload_secondary=payload_v2,
+            model=model_name,
+            fallback_models=fallback_models,
+            payload_primary=payload_plain,
+            payload_secondary=payload_plain_snake,
             timeout=20,
         )
 
@@ -2671,22 +3311,39 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
 
         data = r.json() if r.content else {}
         text = ''
+        candidate = {}
         try:
             # candidates[0].content.parts[0].text
-            cand0 = (data.get('candidates') or [])[0] if (data.get('candidates') or []) else {}
-            parts = (((cand0.get('content') or {}).get('parts')) or [])
+            candidate = (data.get('candidates') or [])[0] if (data.get('candidates') or []) else {}
+            parts = (((candidate.get('content') or {}).get('parts')) or [])
             if parts and isinstance(parts[0], dict):
                 text = parts[0].get('text') or ''
         except Exception:
             text = ''
 
-        parsed = _extract_json_from_text(text)
+        parsed = _sanitize_market_ai_payload(_extract_json_from_text(text), commodity)
+        if not parsed:
+            parsed = _fallback_market_ai_payload(items, commodity)
+        elif parsed.get('recommended_modal_price') is None:
+            fallback_parsed = _fallback_market_ai_payload(items, commodity)
+            if fallback_parsed and fallback_parsed.get('recommended_modal_price') is not None:
+                parsed['recommended_modal_price'] = fallback_parsed.get('recommended_modal_price')
+                if parsed.get('price_min') is None:
+                    parsed['price_min'] = fallback_parsed.get('price_min')
+                if parsed.get('price_max') is None:
+                    parsed['price_max'] = fallback_parsed.get('price_max')
+                if parsed.get('markets_count') is None:
+                    parsed['markets_count'] = fallback_parsed.get('markets_count')
         model_used = _model_from_used_url(used_url, cfg.get('model'))
+
         return {
             'enabled': True,
             'model': model_used,
             'raw_text': text,
-            'parsed': parsed
+            'parsed': parsed,
+            'sources': [],
+            'web_search_queries': [],
+            'grounded': False,
         }
     except Exception as e:
         return {
@@ -3085,23 +3742,65 @@ def price():
     focus_district = request.args.get('district')
     focus_market = request.args.get('market')
 
-    key = norm(commodity)
     cache = load_cache()
-    data = cache.get("commodities", {}).get(key, {})
+    commodity_match = resolve_commodity_name(commodity, cache=cache)
+    resolved_commodity = commodity_match.get('resolved') or commodity
+    resolved_key = commodity_match.get('resolved_key') or norm(commodity)
+
+    data = cache.get("commodities", {}).get(resolved_key, {})
     items = data.get("items", [])
 
     if not items:
-        try:
-            update_prices_for_commodity(commodity, force=True)
-            cache = load_cache()
-            items = cache.get("commodities", {}).get(key, {}).get("items", [])
-        except Exception:
-            pass  # will still try Gemini with empty items
+        fetch_candidates = []
+        if commodity_match.get('match_type') in ('prefix', 'fuzzy'):
+            candidate_pool = (resolved_commodity,)
+        else:
+            candidate_pool = (resolved_commodity, commodity)
 
-    resp = {"success": True, "data": items}
+        seen_fetch_keys = set()
+        for candidate in candidate_pool:
+            candidate_name = str(candidate or '').strip()
+            if not candidate_name:
+                continue
+            candidate_key = norm(candidate_name)
+            if candidate_key in seen_fetch_keys:
+                continue
+            seen_fetch_keys.add(candidate_key)
+            fetch_candidates.append(candidate_name)
+
+        for candidate in fetch_candidates:
+            try:
+                update_prices_for_commodity(candidate, force=True)
+                cache = load_cache()
+                refreshed_match = resolve_commodity_name(candidate, cache=cache)
+                candidate_key = refreshed_match.get('resolved_key') or norm(candidate)
+                items = cache.get("commodities", {}).get(candidate_key, {}).get("items", [])
+                if items:
+                    resolved_commodity = refreshed_match.get('resolved') or candidate
+                    resolved_key = candidate_key
+                    commodity_match = {
+                        'requested': commodity,
+                        'requested_key': commodity_match.get('requested_key') or _commodity_lookup_key(commodity),
+                        'resolved': resolved_commodity,
+                        'resolved_key': resolved_key,
+                        'match_type': commodity_match.get('match_type') if norm(candidate) == norm(resolved_commodity) else 'resolved-fetch',
+                    }
+                    break
+            except Exception:
+                continue
+
+    resp = {
+        "success": True,
+        "data": items,
+        "commodity": {
+            "requested": commodity,
+            "resolved": resolved_commodity,
+            "match_type": commodity_match.get('match_type') or 'exact',
+        }
+    }
     if ai_requested:
         resp['ai'] = gemini_live_price_summary(
-            commodity=commodity,
+            commodity=resolved_commodity,
             items=items,
             state=focus_state,
             district=focus_district,
@@ -3222,6 +3921,9 @@ def admin_api_products():
             coll = mongo_db.get_collection('products')
             prods = list(coll.find({}, {'_id': 0}))
             if request.method == 'GET':
+                for product in prods:
+                    if isinstance(product, dict):
+                        product['icon'] = _normalize_icon_path(product.get('icon'))
                 return jsonify({'success': True, 'products': prods})
     except Exception as e:
         print('admin_api_products -> mongo error:', e)
@@ -3235,7 +3937,12 @@ def admin_api_products():
         pdata = {"products": []}
 
     if request.method == 'GET':
-        return jsonify({'success': True, 'products': pdata.get('products', [])})
+        products = []
+        for product in pdata.get('products', []):
+            item = dict(product)
+            item['icon'] = _normalize_icon_path(item.get('icon'))
+            products.append(item)
+        return jsonify({'success': True, 'products': products})
 
 
 @app.route('/api/products', methods=['GET'])
@@ -3245,6 +3952,9 @@ def public_products():
         if mongo_db is not None:
             coll = mongo_db.get_collection('products')
             prods = list(coll.find({'available': True}, {'_id': 0}))
+            for product in prods:
+                if isinstance(product, dict):
+                    product['icon'] = _normalize_icon_path(product.get('icon'))
             return jsonify({'success': True, 'products': prods})
     except Exception as e:
         print('public_products -> mongo error:', e)
@@ -3256,7 +3966,13 @@ def public_products():
     except Exception:
         pdata = {"products": []}
 
-    available = [p for p in pdata.get('products', []) if p.get('available', False)]
+    available = []
+    for product in pdata.get('products', []):
+        if not product.get('available', False):
+            continue
+        item = dict(product)
+        item['icon'] = _normalize_icon_path(item.get('icon'))
+        available.append(item)
     return jsonify({'success': True, 'products': available})
 
 
@@ -3288,7 +4004,12 @@ def write_products(pdata, force=False):
             coll.delete_many({})
             if pdata.get('products'):
                 # ensure each product is a plain dict without _id
-                docs = [p.copy() for p in pdata.get('products')]
+                docs = []
+                for product in pdata.get('products'):
+                    item = product.copy()
+                    if 'icon' in item:
+                        item['icon'] = _normalize_icon_path(item.get('icon'))
+                    docs.append(item)
                 coll.insert_many(docs)
             print(f"[PRODUCTS] Updated Mongo 'products' collection (caller={caller})")
             return
@@ -3297,8 +4018,14 @@ def write_products(pdata, force=False):
 
     products_file = os.path.join(os.path.dirname(__file__), 'data', 'products.json')
     try:
+        serializable = {'products': []}
+        for product in pdata.get('products', []):
+            item = product.copy()
+            if 'icon' in item:
+                item['icon'] = _normalize_icon_path(item.get('icon'))
+            serializable['products'].append(item)
         with open(products_file, 'w', encoding='utf-8') as f:
-            json.dump(pdata, f, indent=2)
+            json.dump(serializable, f, indent=2)
         print(f"[PRODUCTS] Wrote products.json (caller={caller})")
     except Exception as e:
         print('write_products -> file error:', e)
@@ -3776,12 +4503,24 @@ def admin_api_product_toggle(product_id):
 
 @app.route('/admin/api/pending_listings', methods=['GET'])
 def admin_api_pending_listings():
-    """Return all sell listings with status='pending' for admin review."""
+    """Return pending sell listings and pending sell price-change requests for admin review."""
     x = require_admin()
     if x:
         return x
     orders = read_orders()
-    pending = [o for o in orders if o.get('status') == 'pending' and (o.get('type') or 'sell').lower() == 'sell']
+    pending = []
+    for o in orders:
+        if (o.get('type') or 'sell').lower() != 'sell':
+            continue
+        price_change_request = o.get('price_change_request') or {}
+        if (o.get('status') == 'pending'):
+            item = dict(o)
+            item['review_type'] = 'new-listing'
+            pending.append(item)
+        elif (price_change_request.get('status') == 'pending'):
+            item = dict(o)
+            item['review_type'] = 'price-change'
+            pending.append(item)
     # Sanitize _id for JSON serialization
     out = []
     for o in pending:
@@ -3792,23 +4531,68 @@ def admin_api_pending_listings():
 
 @app.route('/admin/api/listing/<int:listing_id>/approve', methods=['POST'])
 def admin_api_approve_listing(listing_id):
-    """Approve a pending sell listing so it appears on public marketplace."""
+    """Approve a pending sell listing or approve a pending sell price change request."""
     x = require_admin()
     if x:
         return x
     try:
-        # Get listing details before approving for email notification
-        orders = read_orders()
-        listing = next((o for o in orders if int(o.get('id', 0)) == listing_id), None)
+        listing = get_order_by_id(listing_id, include_image=True)
+        if not listing:
+            return jsonify({'success': False, 'message': 'Listing not found'}), 404
+
+        price_change_request = listing.get('price_change_request') or {}
+        if price_change_request.get('status') == 'pending':
+            requested_price = price_change_request.get('requested_price')
+            update_order_by_id(listing_id, {'price': requested_price}, unset_fields=['price_change_request'])
+            if listing.get('user'):
+                email_content = _build_rich_email_content(
+                    'Price Change Approved',
+                    'Your requested listing price has been approved by the admin team and is now live on the marketplace.',
+                    details=[
+                        ('Product', listing.get('product') or 'Your listing'),
+                        ('Listing ID', listing.get('id')),
+                        ('Previous Price', _email_format_currency(listing.get('price'))),
+                        ('Approved Price', _email_format_currency(requested_price)),
+                        ('Quantity', _email_format_quantity(listing.get('quantity'))),
+                        ('Seller Account', listing.get('user')),
+                        ('Reason', price_change_request.get('reason') or 'Not provided'),
+                    ],
+                    badge='Price Approved',
+                    accent='green',
+                )
+                _send_notification_email(
+                    listing['user'],
+                    'AgriAI360 - Price Change Approved',
+                    email_content['text'],
+                    html_body=email_content['html'],
+                )
+            return jsonify({'success': True})
+
         update_order_by_id(listing_id, {'status': 'approved'})
-        # Send email notification to the user
         if listing and listing.get('user'):
             user_email = listing['user']
             product = listing.get('product', 'your listing')
+            email_content = _build_rich_email_content(
+                'Listing Approved',
+                'Your product has been approved and is now visible to buyers in the marketplace.',
+                details=[
+                    ('Product', product),
+                    ('Listing ID', listing.get('id')),
+                    ('Quantity', _email_format_quantity(listing.get('quantity'))),
+                    ('Price', _email_format_currency(listing.get('price'))),
+                    ('Location', listing.get('location') or 'Not provided'),
+                    ('Seller Account', listing.get('user')),
+                    ('Notes', listing.get('notes') or 'Not provided'),
+                    ('Submitted At', _email_format_timestamp(listing.get('timestamp'))),
+                ],
+                badge='Listing Approved',
+                accent='green',
+            )
             _send_notification_email(
                 user_email,
                 'AgriAI360 - Your Listing Has Been Approved!',
-                f'Hello,\n\nYour sell listing for "{product}" has been approved by the admin and is now visible on the marketplace.\n\nThank you for using AgriAI360!'
+                email_content['text'],
+                html_body=email_content['html'],
             )
         return jsonify({'success': True})
     except Exception as e:
@@ -3817,23 +4601,66 @@ def admin_api_approve_listing(listing_id):
 
 @app.route('/admin/api/listing/<int:listing_id>/reject', methods=['POST'])
 def admin_api_reject_listing(listing_id):
-    """Reject and remove a pending sell listing."""
+    """Reject a pending sell listing or reject a pending sell price change request."""
     x = require_admin()
     if x:
         return x
     try:
-        # Get listing details before rejecting for email notification
-        orders = read_orders()
-        listing = next((o for o in orders if int(o.get('id', 0)) == listing_id), None)
+        listing = get_order_by_id(listing_id, include_image=True)
+        if not listing:
+            return jsonify({'success': False, 'message': 'Listing not found'}), 404
+
+        price_change_request = listing.get('price_change_request') or {}
+        if price_change_request.get('status') == 'pending':
+            update_order_by_id(listing_id, {}, unset_fields=['price_change_request'])
+            if listing.get('user'):
+                email_content = _build_rich_email_content(
+                    'Price Change Rejected',
+                    'Your requested price update was not approved. You can review the listing and submit another request later.',
+                    details=[
+                        ('Product', listing.get('product') or 'Your listing'),
+                        ('Listing ID', listing.get('id')),
+                        ('Current Price', _email_format_currency(listing.get('price'))),
+                        ('Requested Price', _email_format_currency(price_change_request.get('requested_price'))),
+                        ('Quantity', _email_format_quantity(listing.get('quantity'))),
+                        ('Seller Account', listing.get('user')),
+                        ('Reason', price_change_request.get('reason') or 'Not provided'),
+                    ],
+                    badge='Price Rejected',
+                    accent='red',
+                )
+                _send_notification_email(
+                    listing['user'],
+                    'AgriAI360 - Price Change Rejected',
+                    email_content['text'],
+                    html_body=email_content['html'],
+                )
+            return jsonify({'success': True})
+
         delete_order_by_id(listing_id)
-        # Send email notification to the user
         if listing and listing.get('user'):
             user_email = listing['user']
             product = listing.get('product', 'your listing')
+            email_content = _build_rich_email_content(
+                'Listing Not Approved',
+                'Your sell listing was not approved by the admin team. Please review the details and submit it again if needed.',
+                details=[
+                    ('Product', product),
+                    ('Listing ID', listing.get('id')),
+                    ('Quantity', _email_format_quantity(listing.get('quantity'))),
+                    ('Price', _email_format_currency(listing.get('price'))),
+                    ('Location', listing.get('location') or 'Not provided'),
+                    ('Seller Account', listing.get('user')),
+                    ('Notes', listing.get('notes') or 'Not provided'),
+                ],
+                badge='Listing Rejected',
+                accent='red',
+            )
             _send_notification_email(
                 user_email,
                 'AgriAI360 - Listing Update',
-                f'Hello,\n\nYour sell listing for "{product}" was not approved by the admin.\n\nPlease review and resubmit if needed.\n\nThank you for using AgriAI360!'
+                email_content['text'],
+                html_body=email_content['html'],
             )
         return jsonify({'success': True})
     except Exception as e:
@@ -3919,15 +4746,40 @@ def admin_api_update_order(order_id):
 
     ok = update_order_by_id(order_id, updates)
     if ok:
+        email_snapshot = dict(order_info or {})
+        email_snapshot.update(updates)
+        order_type_value = (email_snapshot.get('type') or '').lower()
+        if order_type_value == 'sell' and status in ('completed', 'cancelled', 'rejected'):
+            _apply_terminal_listing_state(order_id, status=status)
         # Send email notification on status change
-        if order_info and order_info.get('user') and status:
-            user_email = order_info['user']
-            product = order_info.get('product', 'your order')
-            order_type = (order_info.get('type') or 'order').capitalize()
+        if email_snapshot and email_snapshot.get('user') and status:
+            user_email = email_snapshot['user']
+            product = email_snapshot.get('product', 'your order')
+            order_type = (email_snapshot.get('type') or 'order').capitalize()
+            email_content = _build_rich_email_content(
+                f'{order_type} Status Updated',
+                f'Your {order_type.lower()} has been updated by the admin team. Review the latest order information below.',
+                details=[
+                    ('Order Type', order_type),
+                    ('Product', product),
+                    ('Order ID', email_snapshot.get('id') or order_id),
+                    ('Listing ID', email_snapshot.get('listing_id') or 'Not linked'),
+                    ('Status', str(status).capitalize()),
+                    ('Quantity', _email_format_quantity(email_snapshot.get('quantity'))),
+                    ('Price', _email_format_currency(email_snapshot.get('price'))),
+                    ('Seller / Account', email_snapshot.get('seller') or email_snapshot.get('user')),
+                    ('Location', email_snapshot.get('location') or 'Not provided'),
+                    ('Notes', email_snapshot.get('notes') or 'Not provided'),
+                    ('Created At', _email_format_timestamp(email_snapshot.get('timestamp'))),
+                ],
+                badge=f'{order_type} Update',
+                accent='blue' if order_type_value == 'buy' else 'amber',
+            )
             _send_notification_email(
                 user_email,
                 f'AgriAI360 - {order_type} Status Update',
-                f'Hello,\n\nYour {order_type.lower()} for "{product}" has been updated to: {status}.\n\nThank you for using AgriAI360!'
+                email_content['text'],
+                html_body=email_content['html'],
             )
         return jsonify({'success': True})
     return jsonify({'success': False, 'message': 'Order not found'}), 404
@@ -4182,4 +5034,4 @@ if __name__ == "__main__":
     except Exception:
         port = 5000
     debug = str(os.environ.get('FLASK_DEBUG', '0')).lower() in ('1', 'true', 'yes')
-    app.run(debug=debug, host="0.0.0.0", port=port)
+    app.run(debug=debug, host="0.0.0.0", port=port, use_reloader=False)

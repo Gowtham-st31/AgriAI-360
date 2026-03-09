@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AgriAI-360 | Products</title>
-    <link rel="icon" type="image/png" href="/icons/logo.png">
+  <link rel="icon" type="image/png" href="/icons/logo.png">
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -44,7 +44,14 @@
   </div>
 
   <div class="glass-panel rounded-3xl p-6">
+    <h2 class="text-base font-semibold text-slate-300 mb-4 flex items-center gap-2"><i class="fa-solid fa-boxes-stacked text-blue-400 fa-sm"></i>Catalog Products</h2>
     <div id="list" class="text-slate-400 text-sm">Loading...</div>
+  </div>
+
+  <div class="glass-panel rounded-3xl p-6 mt-6">
+    <h2 class="text-base font-semibold text-slate-300 mb-4 flex items-center gap-2"><i class="fa-solid fa-store text-emerald-400 fa-sm"></i>Available Marketplace Products</h2>
+    <p class="text-slate-500 text-sm mb-4">These are the approved sell listings currently visible to users in the marketplace.</p>
+    <div id="marketplace-list" class="text-slate-400 text-sm">Loading...</div>
   </div>
 </main>
 
@@ -53,6 +60,8 @@ async function api(path, opts){
   const r = await fetch(path, Object.assign({credentials:'include', headers:{'Content-Type':'application/json'}}, opts));
   try{return await r.json()}catch(e){return {success:false,message:'Invalid JSON'}}
 }
+
+function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t == null ? '' : String(t); return d.innerHTML; }
 
 async function load(){
   const wrap = document.getElementById('list');
@@ -65,10 +74,13 @@ async function load(){
     const badge = p.available
       ? '<span style="padding:2px 9px;border-radius:999px;background:rgba(16,185,129,.15);color:#34d399;font-size:10px;font-weight:600">Available</span>'
       : '<span style="padding:2px 9px;border-radius:999px;background:rgba(255,255,255,.07);color:#64748b;font-size:10px;font-weight:600">Hidden</span>';
+    const icon = p.icon
+      ? `<img src="${escapeHtml(p.icon)}" alt="${escapeHtml(p.name||'product')}" style="width:40px;height:40px;object-fit:cover;border-radius:10px;border:1px solid rgba(255,255,255,.08)" onerror="this.onerror=null;this.src='/icons/market.png'">`
+      : '<div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;color:#64748b"><i class="fa-solid fa-image"></i></div>';
     return `<tr data-id="${p.id}">
       <td class="text-slate-500">${p.id}</td>
       <td class="font-medium text-slate-200">${p.name}</td>
-      <td class="text-slate-500">${p.icon||'—'}</td>
+      <td>${icon}</td>
       <td>${badge}</td>
       <td>
         <div style="display:flex;gap:6px">
@@ -94,16 +106,38 @@ async function load(){
   }));
 }
 
+async function loadMarketplaceProducts(){
+  const wrap = document.getElementById('marketplace-list');
+  wrap.innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
+  const r = await api('/api/marketplace');
+  if(!r.success){ wrap.innerHTML = '<div class="text-slate-500 text-sm">Failed to load marketplace products.</div>'; return; }
+  const items = r.items || [];
+  if(!items.length){ wrap.innerHTML = '<div class="text-slate-500 text-sm italic">No approved marketplace products available.</div>'; return; }
+  const rows = items.map(p=>{
+    const icon = p.icon ? `<img src="${escapeHtml(p.icon)}" alt="${escapeHtml(p.product||'product')}" style="width:40px;height:40px;object-fit:cover;border-radius:10px;border:1px solid rgba(255,255,255,.08)" onerror="this.onerror=null;this.src='/icons/market.png'">` : '<div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,.05);display:flex;align-items:center;justify-content:center;color:#64748b"><i class="fa-solid fa-image"></i></div>';
+    return `<tr>
+      <td>${icon}</td>
+      <td class="font-medium text-slate-200">${escapeHtml(p.product||'—')}</td>
+      <td>${escapeHtml(String(p.quantity||'—'))} kg</td>
+      <td class="text-emerald-400 font-semibold">₹${escapeHtml(String(p.price||'—'))}</td>
+      <td class="text-slate-500">${escapeHtml(p.seller||'anon')}</td>
+      <td class="text-slate-500">${escapeHtml(String(p.id||'—'))}</td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `<div class="overflow-x-auto"><table class="agri-table"><thead><tr><th>Image</th><th>Product</th><th>Qty</th><th>Price</th><th>Seller</th><th>Listing ID</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 document.getElementById('add').addEventListener('click', async ()=>{
   const name = document.getElementById('p_name').value.trim();
   const icon = document.getElementById('p_icon').value.trim();
   if(!name){ alert('Enter product name'); return }
   const res = await api('/admin/api/products', {method:'POST', body: JSON.stringify({name, icon})});
-  if(res.success){ document.getElementById('p_name').value=''; document.getElementById('p_icon').value=''; load(); }
+  if(res.success){ document.getElementById('p_name').value=''; document.getElementById('p_icon').value=''; load(); loadMarketplaceProducts(); }
   else alert('Failed: '+(res.message||''));
 });
 
 load();
+loadMarketplaceProducts();
 </script>
 </body>
 </html>

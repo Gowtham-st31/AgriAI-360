@@ -19,6 +19,18 @@
     .tab-btn{padding:8px 20px;border-radius:999px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid rgba(255,255,255,.08);background:transparent;color:#94a3b8;transition:all .15s;font-family:'Poppins',sans-serif}
     .tab-btn.active{background:linear-gradient(135deg,#10b981,#3b82f6);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(16,185,129,.3)}
     .status-badge{padding:2px 8px;border-radius:999px;font-size:10px;font-weight:600;display:inline-block}
+    .action-btn{padding:7px 12px;border-radius:10px;border:1px solid rgba(16,185,129,.25);background:rgba(16,185,129,.1);color:#34d399;font-size:11px;font-weight:600;cursor:pointer;font-family:'Poppins',sans-serif;transition:all .15s}
+    .action-btn:hover{background:rgba(16,185,129,.18)}
+    .action-btn:disabled{opacity:.6;cursor:default}
+    .request-box{margin-top:6px;font-size:11px;color:#94a3b8;line-height:1.5}
+    .dialog-overlay{position:fixed;inset:0;background:rgba(2,6,23,.78);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px;z-index:60}
+    .dialog-panel{width:min(100%,460px);background:rgba(15,23,42,.96);border:1px solid rgba(255,255,255,.08);border-radius:24px;box-shadow:0 24px 80px rgba(0,0,0,.45);padding:24px}
+    .dialog-input,.dialog-textarea{width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#f8fafc;border-radius:14px;padding:12px 14px;font-size:14px;font-family:'Poppins',sans-serif;outline:none;transition:border-color .15s,box-shadow .15s}
+    .dialog-input:focus,.dialog-textarea:focus{border-color:rgba(16,185,129,.65);box-shadow:0 0 0 3px rgba(16,185,129,.15)}
+    .dialog-textarea{min-height:92px;resize:vertical}
+    .dialog-cancel{padding:11px 16px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:#cbd5e1;font-size:13px;font-weight:600;font-family:'Poppins',sans-serif;cursor:pointer}
+    .dialog-submit{padding:11px 18px;border-radius:14px;border:none;background:linear-gradient(135deg,#10b981,#0ea5e9);color:#fff;font-size:13px;font-weight:700;font-family:'Poppins',sans-serif;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+    .dialog-submit:disabled,.dialog-cancel:disabled{opacity:.65;cursor:default}
   </style>
 </head>
 <body class="bg-slate-900 min-h-screen text-slate-100">
@@ -45,6 +57,33 @@
   </div>
 </main>
 
+<div id="price-change-dialog" class="dialog-overlay" style="display:none">
+  <div class="dialog-panel">
+    <div class="flex items-start justify-between gap-3 mb-5">
+      <div>
+        <h2 class="text-xl font-bold text-white">Request New Price</h2>
+        <p id="price-change-product" class="text-slate-400 text-sm mt-1"></p>
+      </div>
+      <button id="price-change-close" type="button" class="text-slate-500 hover:text-white transition-colors text-lg leading-none">&times;</button>
+    </div>
+    <div class="space-y-4">
+      <div>
+        <label for="price-change-value" class="block text-slate-300 text-xs font-semibold uppercase tracking-wide mb-2">New Price</label>
+        <input id="price-change-value" type="number" min="1" step="0.01" class="dialog-input" placeholder="Enter new price">
+      </div>
+      <div>
+        <label for="price-change-reason" class="block text-slate-300 text-xs font-semibold uppercase tracking-wide mb-2">Reason</label>
+        <textarea id="price-change-reason" class="dialog-textarea" placeholder="Why should the price be changed?"></textarea>
+      </div>
+      <div id="price-change-error" class="text-red-400 text-sm" style="display:none"></div>
+      <div class="flex items-center justify-end gap-3 pt-2">
+        <button id="price-change-cancel" type="button" class="dialog-cancel">Cancel</button>
+        <button id="price-change-submit" type="button" class="dialog-submit"><i class="fa-solid fa-paper-plane fa-sm"></i>Send Request</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 async function api(path, opts) {
   const res = await fetch(path, Object.assign({credentials: 'include', headers: {'Content-Type':'application/json'}}, opts));
@@ -53,6 +92,7 @@ async function api(path, opts) {
 
 let allOrders = [];
 let currentFilter = 'all';
+let activePriceChangeOrderId = null;
 
 function statusColor(s){
   if(!s) return 'background:rgba(100,116,139,.15);color:#94a3b8';
@@ -74,6 +114,98 @@ function typeColor(t){
 
 function escapeHtml(t){ const d=document.createElement('div'); d.textContent=t; return d.innerHTML; }
 
+function getOrderImage(order){
+  const icon = (order && order.icon ? String(order.icon).trim() : '');
+  if(icon) return icon.startsWith('/') || /^https?:\/\//i.test(icon) || /^data:/i.test(icon) ? icon : ('/icons/' + icon.replace(/^\/+/, ''));
+  return '/icons/market.png';
+}
+
+function canRequestPriceChange(order){
+  const type=(order.type||'').toLowerCase();
+  const status=(order.status||'').toLowerCase();
+  if(type!=='sell') return false;
+  if(['completed','cancelled','rejected'].includes(status)) return false;
+  return true;
+}
+
+function openPriceChangeDialog(orderId){
+  const order=allOrders.find(o=>String(o.id)===String(orderId));
+  if(!order) return;
+
+  activePriceChangeOrderId = orderId;
+  document.getElementById('price-change-product').textContent = 'Product: ' + (order.product || 'Listing');
+  document.getElementById('price-change-value').value = Number(order.price||0) || '';
+  document.getElementById('price-change-reason').value = '';
+  document.getElementById('price-change-error').style.display = 'none';
+  document.getElementById('price-change-error').textContent = '';
+  document.getElementById('price-change-dialog').style.display = 'flex';
+  setTimeout(()=>{ try{ document.getElementById('price-change-value').focus(); document.getElementById('price-change-value').select(); }catch(e){} }, 0);
+}
+
+function closePriceChangeDialog(){
+  activePriceChangeOrderId = null;
+  document.getElementById('price-change-dialog').style.display = 'none';
+  document.getElementById('price-change-error').style.display = 'none';
+  document.getElementById('price-change-error').textContent = '';
+}
+
+async function submitPriceChange(){
+  const orderId = activePriceChangeOrderId;
+  const order=allOrders.find(o=>String(o.id)===String(orderId));
+  if(!order) return;
+
+  const requestedPrice=Number(String(document.getElementById('price-change-value').value||'').trim());
+  const reason=(document.getElementById('price-change-reason').value||'').trim();
+  const errorBox=document.getElementById('price-change-error');
+  const submitBtn=document.getElementById('price-change-submit');
+  const cancelBtn=document.getElementById('price-change-cancel');
+  const closeBtn=document.getElementById('price-change-close');
+  const rowBtn=document.querySelector('[data-price-change-id="'+orderId+'"]');
+
+  if(!Number.isFinite(requestedPrice) || requestedPrice<=0){
+    errorBox.textContent='Enter a valid price greater than 0.';
+    errorBox.style.display='block';
+    return;
+  }
+
+  errorBox.style.display='none';
+  submitBtn.disabled=true;
+  cancelBtn.disabled=true;
+  closeBtn.disabled=true;
+  submitBtn.innerHTML='<i class="fa-solid fa-circle-notch fa-spin fa-sm"></i>Sending...';
+  if(rowBtn){ rowBtn.disabled=true; rowBtn.textContent='Sending...'; }
+
+  try{
+    const r=await api('/api/order/'+encodeURIComponent(orderId)+'/price-change-request', {
+      method:'POST',
+      body: JSON.stringify({requested_price: requestedPrice, reason})
+    });
+    if(!r.success){
+      errorBox.textContent=r.message||'Could not submit price change request.';
+      errorBox.style.display='block';
+      return;
+    }
+    const idx=allOrders.findIndex(o=>String(o.id)===String(orderId));
+    if(idx>=0){
+      allOrders[idx].price_change_request=r.request;
+    }
+    closePriceChangeDialog();
+    renderOrders();
+    alert('Price change request sent to admin.');
+  }catch(e){
+    errorBox.textContent='Could not submit price change request.';
+    errorBox.style.display='block';
+  } finally {
+    submitBtn.disabled=false;
+    cancelBtn.disabled=false;
+    closeBtn.disabled=false;
+    submitBtn.innerHTML='<i class="fa-solid fa-paper-plane fa-sm"></i>Send Request';
+    if(rowBtn){ rowBtn.disabled=false; rowBtn.textContent='Request Price Change'; }
+  }
+}
+
+window.requestPriceChange=openPriceChangeDialog;
+
 function renderOrders(){
   const box = document.getElementById('orders-area');
   const filtered = currentFilter==='all' ? allOrders : allOrders.filter(o=>(o.type||'').toLowerCase()===currentFilter);
@@ -81,17 +213,28 @@ function renderOrders(){
     box.innerHTML='<div class="text-slate-500 text-sm italic py-4 text-center">No orders found.</div>';
     return;
   }
-  let html='<div class="overflow-x-auto"><table class="agri-table"><thead><tr><th>Type</th><th>Product</th><th>Qty</th><th>Price</th><th>Status</th><th>Date</th></tr></thead><tbody>';
+  let html='<div class="overflow-x-auto"><table class="agri-table"><thead><tr><th>Type</th><th>Image</th><th>Product</th><th>Qty</th><th>Price</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead><tbody>';
   html+=filtered.map(o=>{
     const d=new Date((o.timestamp||0)*1000);
     const dateStr=o.timestamp?d.toLocaleDateString():'—';
+    const req=o.price_change_request||{};
+    let actions='—';
+    if(canRequestPriceChange(o)){
+      if((req.status||'').toLowerCase()==='pending'){
+        actions='<div class="request-box">Pending request: <span class="text-amber-300 font-semibold">₹'+escapeHtml(String(req.requested_price||'—'))+'</span>'+(req.reason?'<br>Reason: '+escapeHtml(String(req.reason)):'')+'</div>';
+      }else{
+        actions='<button class="action-btn" data-price-change-id="'+escapeHtml(String(o.id||''))+'" onclick="requestPriceChange('+escapeHtml(String(o.id||0))+')">Request Price Change</button>';
+      }
+    }
     return '<tr>'
       +'<td><span class="status-badge" style="'+typeColor(o.type)+'">'+escapeHtml((o.type||'—').toUpperCase())+'</span></td>'
+      +'<td><img src="'+escapeHtml(getOrderImage(o))+'" alt="'+escapeHtml(o.product||'product')+'" style="width:44px;height:44px;object-fit:cover;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04)" onerror="this.onerror=null;this.src=\'/icons/market.png\'"></td>'
       +'<td class="font-medium text-slate-200">'+escapeHtml(o.product||'—')+'</td>'
       +'<td>'+escapeHtml(String(o.quantity||'—'))+'</td>'
       +'<td class="text-emerald-400 font-semibold">\u20B9'+escapeHtml(String(o.price||'—'))+'</td>'
       +'<td><span class="status-badge" style="'+statusColor(o.status)+'">'+escapeHtml((o.status||'—'))+'</span></td>'
       +'<td class="text-slate-500">'+dateStr+'</td>'
+      +'<td>'+actions+'</td>'
       +'</tr>';
   }).join('');
   html+='</tbody></table></div>';
@@ -119,6 +262,22 @@ document.querySelectorAll('.tab-btn').forEach(btn=>{
 });
 
 loadOrders();
+
+document.getElementById('price-change-cancel').addEventListener('click', closePriceChangeDialog);
+document.getElementById('price-change-close').addEventListener('click', closePriceChangeDialog);
+document.getElementById('price-change-submit').addEventListener('click', submitPriceChange);
+document.getElementById('price-change-dialog').addEventListener('click', function(e){
+  if(e.target && e.target.id==='price-change-dialog') closePriceChangeDialog();
+});
+document.getElementById('price-change-value').addEventListener('keydown', function(e){
+  if(e.key==='Enter'){ e.preventDefault(); submitPriceChange(); }
+});
+document.getElementById('price-change-reason').addEventListener('keydown', function(e){
+  if(e.key==='Escape'){ e.preventDefault(); closePriceChangeDialog(); }
+});
+document.addEventListener('keydown', function(e){
+  if(e.key==='Escape' && activePriceChangeOrderId!==null) closePriceChangeDialog();
+});
 </script>
 </body>
 </html>

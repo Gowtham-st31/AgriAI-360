@@ -36,7 +36,7 @@
     var LO="this.style.color='#94a3b8';this.style.background='transparent'";
     return `
     <nav style="position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(15,23,42,.8);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-bottom:1px solid rgba(255,255,255,.06);font-family:'Poppins',sans-serif" id="site-nav">
-      <div style="max-width:1280px;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:68px;gap:16px">
+      <div style="max-width:1280px;margin:0 auto;padding:0 20px;display:flex;align-items:center;justify-content:space-between;height:68px;gap:16px;position:relative">
 
         <a id="brand-link" href="/home" style="display:flex;align-items:center;gap:10px;text-decoration:none;flex-shrink:0">
           <div style="width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#10b981,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff;font-size:17px;box-shadow:0 4px 12px rgba(16,185,129,.35)">
@@ -61,6 +61,8 @@
             @media(max-width:768px){
               #site-nav .nav-links{display:none !important}
               #site-nav .mobile-menu-btn{display:flex !important}
+              #site-nav .mobile-menu-btn{position:absolute !important;left:12px !important;top:50% !important;transform:translateY(-50%) !important;z-index:2}
+              #site-nav #brand-link{margin-left:52px !important}
             }
             #site-nav .mobile-menu-btn{display:none}
           </style>
@@ -357,13 +359,36 @@
   window.getCart = function(){ try{ return JSON.parse(localStorage.getItem('agri_cart')||'[]') }catch(e){ return [] } }
   window.setCart = function(c){ try{ localStorage.setItem('agri_cart', JSON.stringify(c)) }catch(e){} }
   window.updateCartCount = function(){ const el = document.getElementById('cart-count'); if(!el) return; const n = window.getCart().reduce((s,it)=>s+(it.qty||1),0); el.textContent = n; }
+  function normalizeAvailableQuantity(item){
+      const raw = item && (item.available_quantity ?? item.quantity ?? item.stock ?? null);
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+    function normalizeIconPath(icon){
+      const text = (icon || '').toString().trim();
+      if(!text) return '';
+      if(text.startsWith('/') || /^https?:\/\//i.test(text) || /^data:/i.test(text)) return text;
+      return '/icons/' + text.replace(/^\/+/, '');
+    }
   window.addToCart = function(item, goToCart){ try{
       if(!item) { alert('Item not available'); return }
       const cart = window.getCart();
+      const itemIcon = normalizeIconPath(item.icon);
+      const availableQuantity = normalizeAvailableQuantity(item);
       // ensure a stable id exists for the cart item
       if(!item.id){ try{ item.id = ('prod_'+((item.product||'').toString().toLowerCase().replace(/[^a-z0-9]+/g,'_'))+'_'+((item.seller||'').toString().toLowerCase().replace(/[^a-z0-9]+/g,'_'))).replace(/_+$/,''); }catch(e){} }
       const existing = cart.find(c=> (c.id && item.id && c.id==item.id) || (c.product && item.product && c.product==item.product && c.seller==item.seller) );
-      if(existing){ existing.qty = (existing.qty||1) + 1 } else { cart.push(Object.assign({}, { id: item.id, product: item.product, seller: item.seller, price: item.price, qty: 1 })) }
+      if(existing){
+        const nextQty = (existing.qty||1) + 1;
+        const limit = availableQuantity || existing.available_quantity || null;
+        if(limit !== null && nextQty > limit){ alert('Only '+limit+' kg available for '+(item.product||'this product')+'.'); return }
+        existing.qty = nextQty;
+        if(itemIcon) existing.icon = itemIcon;
+        if(limit !== null) existing.available_quantity = limit;
+      }
+      else {
+        cart.push(Object.assign({}, { id: item.id, product: item.product, seller: item.seller, price: item.price, qty: 1, icon: itemIcon || null, available_quantity: availableQuantity }))
+      }
       window.setCart(cart);
       window.updateCartCount();
       // update floating cart count if present
