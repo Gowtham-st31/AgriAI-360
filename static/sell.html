@@ -92,7 +92,7 @@
 
 <script>
 function clearForm(){
-  ['product','quantity','price','location','notes'].forEach(id=>{try{document.getElementById(id).value=''}catch(e){}});
+  ['product','quantity','price','location','notes','seller-contact-email'].forEach(id=>{try{document.getElementById(id).value=''}catch(e){}});
   try{const f=document.getElementById('product-image');if(f){f.value=null;}const p=document.getElementById('product-image-preview');if(p){p.src='';p.style.display='none';}}catch(e){}
 }
 
@@ -113,7 +113,7 @@ try{
 }catch(e){}
 
 async function postListing(){
-  const data={product:(document.getElementById('product').value||'').trim(),quantity:document.getElementById('quantity').value,price:document.getElementById('price').value,location:document.getElementById('location').value,notes:document.getElementById('notes').value};
+  const data={product:(document.getElementById('product').value||'').trim(),quantity:document.getElementById('quantity').value,price:document.getElementById('price').value,location:document.getElementById('location').value,notes:document.getElementById('notes').value,contact:(document.getElementById('seller-contact-email').value||'').trim()};
   if(!data.product||!data.quantity||!data.price){document.getElementById('result').innerHTML='<div class="glass-panel rounded-xl p-3 text-sm text-red-400" style="border-color:rgba(239,68,68,.2)"><i class="fa-solid fa-triangle-exclamation mr-1.5"></i>Please fill product, quantity and price.</div>';return}
   try{
     const fileInput=document.getElementById('product-image');
@@ -122,7 +122,7 @@ async function postListing(){
     if(file){
       if(file.type!=='image/png'){document.getElementById('result').innerHTML='<div class="glass-panel rounded-xl p-3 text-sm text-red-400" style="border-color:rgba(239,68,68,.2)"><i class="fa-solid fa-triangle-exclamation mr-1.5"></i>Please upload a PNG image.</div>';return;}
       const form=new FormData();
-      form.append('product',data.product);form.append('quantity',data.quantity);form.append('price',data.price);form.append('location',data.location||'');form.append('notes',data.notes||'');form.append('image',file,file.name);
+      form.append('product',data.product);form.append('quantity',data.quantity);form.append('price',data.price);form.append('location',data.location||'');form.append('notes',data.notes||'');form.append('contact',data.contact||'');form.append('image',file,file.name);
       res=await fetch('/api/marketplace',{method:'POST',body:form,credentials:'include'});
       try{j=await res.json();}catch(e){j={success:false,message:'Invalid server response'}}
     }else{

@@ -1165,6 +1165,35 @@ def _email_format_timestamp(value) -> str:
         return str(value)
 
 
+def _normalize_email_address(value) -> str | None:
+    if value is None:
+        return None
+    email = str(value).strip()
+    if not email or '@' not in email or ' ' in email or '@…' in email:
+        return None
+    return email
+
+
+def _resolve_notification_email(record, *preferred_fields) -> str | None:
+    if isinstance(record, str):
+        return _normalize_email_address(record)
+    if not isinstance(record, dict):
+        return None
+
+    fields = list(preferred_fields or [])
+    fields.extend(['user', 'buyer_email', 'seller_email', 'contact', 'email', 'seller'])
+
+    seen = set()
+    for field in fields:
+        if field in seen:
+            continue
+        seen.add(field)
+        email = _normalize_email_address(record.get(field))
+        if email:
+            return email
+    return None
+
+
 def _build_rich_email_content(title: str, message: str, details=None, badge: str = '', accent: str = 'green'):
     palette = {
         'green': {'solid': '#10b981', 'soft': '#ecfdf5', 'dark': '#064e3b'},
@@ -1824,17 +1853,24 @@ def place_order():
     if requested_quantity_num is None or requested_quantity_num <= 0:
         return jsonify({'success': False, 'message': 'Quantity must be greater than zero'}), 400
 
+    target_listing = None
+    listing_id_value = None
+    seller_email = None
+
     if order_type == 'buy':
         listing_id = data.get('listing_id')
         if listing_id is not None:
             try:
-                target_listing = get_order_by_id(int(listing_id), include_image=False)
+                listing_id_value = int(listing_id)
+                target_listing = get_order_by_id(listing_id_value, include_image=False)
             except Exception:
                 target_listing = None
+                listing_id_value = None
             if not target_listing or (target_listing.get('type') or 'sell').lower() != 'sell':
                 return jsonify({'success': False, 'message': 'Listing not found'}), 404
             if (target_listing.get('status') or '').lower() != 'approved':
                 return jsonify({'success': False, 'message': 'This listing is not currently available'}), 400
+            seller_email = _resolve_notification_email(target_listing, 'user', 'contact', 'email')
             try:
                 available_quantity_num = float(target_listing.get('quantity'))
             except Exception:
@@ -1852,6 +1888,14 @@ def place_order():
         'price': data['price'],
         'timestamp': time.time()
     }
+    if listing_id_value is not None:
+        order['listing_id'] = listing_id_value
+    if target_listing:
+        order['seller'] = target_listing.get('user') or data.get('seller')
+    elif data.get('seller'):
+        order['seller'] = data.get('seller')
+    if seller_email:
+        order['seller_email'] = seller_email
 
     # Persist order (Mongo or file fallback) and return the saved record.
     try:
@@ -1921,6 +1965,56 @@ def place_order():
         except Exception as e:
             print('place_order -> post-save adjustment error:', e)
 
+        email_order = saved if isinstance(saved, dict) else order
+        if (email_order.get('type') or '').lower() == 'buy':
+            buyer_email = _resolve_notification_email(email_order, 'user', 'buyer_email')
+            seller_notification_email = seller_email or _resolve_notification_email(email_order, 'seller_email', 'seller')
+            buyer_content = _build_rich_email_content(
+                'Buy Order Confirmed',
+                'Your purchase request has been recorded successfully. We will use the order details below for the next step in fulfilment.',
+                details=[
+                    ('Product', email_order.get('product') or 'Order item'),
+                    ('Order ID', email_order.get('id')),
+                    ('Listing ID', email_order.get('listing_id') or 'Not linked'),
+                    ('Quantity', _email_format_quantity(email_order.get('quantity'))),
+                    ('Price', _email_format_currency(email_order.get('price'))),
+                    ('Seller', email_order.get('seller') or 'Marketplace seller'),
+                    ('Placed At', _email_format_timestamp(email_order.get('timestamp'))),
+                ],
+                badge='Buy Confirmed',
+                accent='blue',
+            )
+            if buyer_email:
+                _send_notification_email(
+                    buyer_email,
+                    'AgriAI360 - Buy Order Confirmation',
+                    buyer_content['text'],
+                    html_body=buyer_content['html'],
+                )
+
+            if seller_notification_email and seller_notification_email != buyer_email:
+                seller_content = _build_rich_email_content(
+                    'New Buy Request',
+                    'A buyer has placed an order for your marketplace listing. Review the order details below.',
+                    details=[
+                        ('Product', email_order.get('product') or 'Your listing'),
+                        ('Order ID', email_order.get('id')),
+                        ('Listing ID', email_order.get('listing_id') or 'Not linked'),
+                        ('Quantity', _email_format_quantity(email_order.get('quantity'))),
+                        ('Price', _email_format_currency(email_order.get('price'))),
+                        ('Buyer', email_order.get('user') or 'Registered buyer'),
+                        ('Placed At', _email_format_timestamp(email_order.get('timestamp'))),
+                    ],
+                    badge='New Order',
+                    accent='amber',
+                )
+                _send_notification_email(
+                    seller_notification_email,
+                    'AgriAI360 - New Buy Order Received',
+                    seller_content['text'],
+                    html_body=seller_content['html'],
+                )
+
         if saved:
             return jsonify({'success': True, 'order': saved})
     except Exception as e:
@@ -1960,7 +2054,7 @@ def marketplace():
             price = form.get('price')
             location = form.get('location')
             notes = form.get('notes')
-            contact = form.get('contact') or form.get('seller')
+            contact = form.get('contact') or form.get('seller') or form.get('seller_contact_email')
 
             image_file = request.files.get('image')
             try:
@@ -1987,7 +2081,7 @@ def marketplace():
             price = data.get('price')
             location = data.get('location')
             notes = data.get('notes')
-            contact = data.get('contact') or data.get('seller')
+            contact = data.get('contact') or data.get('seller') or data.get('seller_contact_email')
 
         if not product or not quantity or not price:
             return jsonify({'success': False, 'message': 'product, quantity and price required'}), 400
@@ -2015,6 +2109,8 @@ def marketplace():
             'status': 'pending',
             'timestamp': time.time()
         }
+        if contact:
+            listing['contact'] = contact
 
         if image_bytes and mongo_db is not None:
             listing['image_data'] = base64.b64encode(image_bytes).decode('ascii')
@@ -4544,7 +4640,8 @@ def admin_api_approve_listing(listing_id):
         if price_change_request.get('status') == 'pending':
             requested_price = price_change_request.get('requested_price')
             update_order_by_id(listing_id, {'price': requested_price}, unset_fields=['price_change_request'])
-            if listing.get('user'):
+            recipient_email = _resolve_notification_email(listing, 'user', 'contact')
+            if recipient_email:
                 email_content = _build_rich_email_content(
                     'Price Change Approved',
                     'Your requested listing price has been approved by the admin team and is now live on the marketplace.',
@@ -4561,7 +4658,7 @@ def admin_api_approve_listing(listing_id):
                     accent='green',
                 )
                 _send_notification_email(
-                    listing['user'],
+                    recipient_email,
                     'AgriAI360 - Price Change Approved',
                     email_content['text'],
                     html_body=email_content['html'],
@@ -4569,8 +4666,11 @@ def admin_api_approve_listing(listing_id):
             return jsonify({'success': True})
 
         update_order_by_id(listing_id, {'status': 'approved'})
-        if listing and listing.get('user'):
-            user_email = listing['user']
+        if listing:
+            user_email = _resolve_notification_email(listing, 'user', 'contact')
+        else:
+            user_email = None
+        if user_email:
             product = listing.get('product', 'your listing')
             email_content = _build_rich_email_content(
                 'Listing Approved',
@@ -4613,7 +4713,8 @@ def admin_api_reject_listing(listing_id):
         price_change_request = listing.get('price_change_request') or {}
         if price_change_request.get('status') == 'pending':
             update_order_by_id(listing_id, {}, unset_fields=['price_change_request'])
-            if listing.get('user'):
+            recipient_email = _resolve_notification_email(listing, 'user', 'contact')
+            if recipient_email:
                 email_content = _build_rich_email_content(
                     'Price Change Rejected',
                     'Your requested price update was not approved. You can review the listing and submit another request later.',
@@ -4630,7 +4731,7 @@ def admin_api_reject_listing(listing_id):
                     accent='red',
                 )
                 _send_notification_email(
-                    listing['user'],
+                    recipient_email,
                     'AgriAI360 - Price Change Rejected',
                     email_content['text'],
                     html_body=email_content['html'],
@@ -4638,8 +4739,11 @@ def admin_api_reject_listing(listing_id):
             return jsonify({'success': True})
 
         delete_order_by_id(listing_id)
-        if listing and listing.get('user'):
-            user_email = listing['user']
+        if listing:
+            user_email = _resolve_notification_email(listing, 'user', 'contact')
+        else:
+            user_email = None
+        if user_email:
             product = listing.get('product', 'your listing')
             email_content = _build_rich_email_content(
                 'Listing Not Approved',
@@ -4738,9 +4842,8 @@ def admin_api_update_order(order_id):
         except:
             pass
 
-    # Get order details before updating for email notification
     order_info = None
-    if status in ('approved', 'rejected', 'completed', 'cancelled'):
+    if updates:
         orders = read_orders()
         order_info = next((o for o in orders if int(o.get('id', 0)) == order_id), None)
 
@@ -4751,25 +4854,40 @@ def admin_api_update_order(order_id):
         order_type_value = (email_snapshot.get('type') or '').lower()
         if order_type_value == 'sell' and status in ('completed', 'cancelled', 'rejected'):
             _apply_terminal_listing_state(order_id, status=status)
-        # Send email notification on status change
-        if email_snapshot and email_snapshot.get('user') and status:
-            user_email = email_snapshot['user']
+        changed_fields = []
+        for field in ('status', 'price', 'quantity'):
+            if field in updates:
+                changed_fields.append(field)
+
+        user_email = _resolve_notification_email(email_snapshot, 'user', 'buyer_email', 'contact')
+        if email_snapshot and user_email and changed_fields:
             product = email_snapshot.get('product', 'your order')
             order_type = (email_snapshot.get('type') or 'order').capitalize()
+            status_value = str(email_snapshot.get('status') or 'Updated').capitalize()
+            if changed_fields == ['status']:
+                title = f'{order_type} Status Updated'
+                message = f'Your {order_type.lower()} status has been updated by the admin team.'
+                subject = f'AgriAI360 - {order_type} Status Update'
+            else:
+                title = f'{order_type} Updated'
+                message = 'Your order details were updated by the admin team. Review the latest information below.'
+                subject = f'AgriAI360 - {order_type} Update'
+
             email_content = _build_rich_email_content(
-                f'{order_type} Status Updated',
-                f'Your {order_type.lower()} has been updated by the admin team. Review the latest order information below.',
+                title,
+                message,
                 details=[
                     ('Order Type', order_type),
                     ('Product', product),
                     ('Order ID', email_snapshot.get('id') or order_id),
                     ('Listing ID', email_snapshot.get('listing_id') or 'Not linked'),
-                    ('Status', str(status).capitalize()),
+                    ('Status', status_value),
                     ('Quantity', _email_format_quantity(email_snapshot.get('quantity'))),
                     ('Price', _email_format_currency(email_snapshot.get('price'))),
                     ('Seller / Account', email_snapshot.get('seller') or email_snapshot.get('user')),
                     ('Location', email_snapshot.get('location') or 'Not provided'),
                     ('Notes', email_snapshot.get('notes') or 'Not provided'),
+                    ('Updated Fields', ', '.join(field.replace('_', ' ').title() for field in changed_fields)),
                     ('Created At', _email_format_timestamp(email_snapshot.get('timestamp'))),
                 ],
                 badge=f'{order_type} Update',
@@ -4777,7 +4895,7 @@ def admin_api_update_order(order_id):
             )
             _send_notification_email(
                 user_email,
-                f'AgriAI360 - {order_type} Status Update',
+                subject,
                 email_content['text'],
                 html_body=email_content['html'],
             )
