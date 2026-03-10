@@ -25,6 +25,12 @@ import inspect
 import hashlib
 from bs4 import BeautifulSoup, FeatureNotFound
 from apscheduler.schedulers.background import BackgroundScheduler
+try:
+    from google.auth.transport import requests as google_auth_requests
+    from google.oauth2 import id_token as google_id_token
+except Exception:
+    google_auth_requests = None
+    google_id_token = None
 
 # ================== SMTP Mail Config ==================
 # SMTP is configured via environment variables (optionally via .env).
@@ -791,6 +797,44 @@ def find_user(email: str):
         if u.get("email") == email:
             return u
     return None
+
+
+def google_client_id() -> str:
+    return (os.environ.get('GOOGLE_CLIENT_ID') or '').strip()
+
+
+def upsert_google_user(email: str, google_claims: dict | None = None):
+    claims = google_claims or {}
+    clean_email = (email or '').strip()
+    if not clean_email:
+        return None
+
+    profile_updates = {}
+    full_name = (claims.get('name') or '').strip()
+    if full_name:
+        profile_updates['name'] = full_name
+
+    existing_user = find_user(clean_email)
+    google_sub = (claims.get('sub') or '').strip()
+
+    if existing_user is None:
+        new_user = merge_user_profile({'email': clean_email}, profile_updates)
+        if google_sub:
+            new_user['google_sub'] = google_sub
+        new_user['auth_provider'] = 'google'
+        users_data = load_users()
+        users_data.setdefault('users', []).append(new_user)
+        save_users(users_data)
+        return new_user
+
+    def updater(user):
+        updated = merge_user_profile(user, profile_updates)
+        if google_sub and not updated.get('google_sub'):
+            updated['google_sub'] = google_sub
+        updated['auth_provider'] = updated.get('auth_provider') or 'google'
+        return updated
+
+    return update_user_record(clean_email, updater)
 
 
 # -------------------------
@@ -1726,6 +1770,63 @@ def register():
     except Exception as e:
         print(f"[OTP] send failed for {email} (register): {e}")
         return {"success": False, "message": "Failed to send OTP email"}, 502
+
+
+@app.route('/auth/google/config')
+def auth_google_config():
+    client_id = google_client_id()
+    return jsonify({
+        'success': True,
+        'enabled': bool(client_id and google_id_token and google_auth_requests),
+        'client_id': client_id,
+    })
+
+
+@app.route('/auth/google', methods=['POST'])
+def auth_google():
+    client_id = google_client_id()
+    if not client_id:
+        return {'success': False, 'message': 'Google sign up is not configured on the server'}, 503
+    if google_id_token is None or google_auth_requests is None:
+        return {'success': False, 'message': 'Google auth dependency is not installed on the server'}, 500
+
+    data = request.get_json() or {}
+    credential = (data.get('credential') or '').strip()
+    if not credential:
+        return {'success': False, 'message': 'Google credential is required'}, 400
+
+    try:
+        token_info = google_id_token.verify_oauth2_token(
+            credential,
+            google_auth_requests.Request(),
+            client_id,
+        )
+    except Exception as exc:
+        print(f'[google-auth] token verification failed: {exc}')
+        return {'success': False, 'message': 'Google sign up failed. Please try again.'}, 401
+
+    issuer = (token_info.get('iss') or '').strip()
+    if issuer not in ('accounts.google.com', 'https://accounts.google.com'):
+        return {'success': False, 'message': 'Invalid Google token issuer'}, 401
+
+    email = (token_info.get('email') or '').strip().lower()
+    if not email:
+        return {'success': False, 'message': 'Google account email is unavailable'}, 400
+    if not token_info.get('email_verified'):
+        return {'success': False, 'message': 'Google account email is not verified'}, 400
+
+    user = upsert_google_user(email, token_info)
+    if user is None:
+        return {'success': False, 'message': 'Unable to create your account'}, 500
+
+    if email.lower() in ADMIN_EMAILS:
+        session['admin'] = True
+        session['user'] = email
+        return {'success': True, 'role': 'admin', 'redirect': '/admin/dashboard'}
+
+    session['user'] = email
+    session.pop('admin', None)
+    return {'success': True, 'role': 'user', 'redirect': '/home'}
 
 
 @app.route("/auth/login_password", methods=["POST"])

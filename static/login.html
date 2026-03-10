@@ -6,6 +6,7 @@
   <title>AgriAI-360 | Login</title>
   <meta name="google-site-verification" content="xmyUSkVyJ0G2CkvmFuRuNhdMVtLFpUnlI8Q3YOIif9s" />
   <link rel="icon" type="image/png" href="/icons/logo.png">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -29,6 +30,10 @@
     .msg.ok{display:block;background:rgba(16,185,129,.12);color:#34d399;border:1px solid rgba(16,185,129,.2)}
     label{font-size:12px;color:#64748b;display:block;margin-top:14px;margin-bottom:4px;font-weight:500}
     .blob{position:fixed;border-radius:50%;filter:blur(120px);opacity:.15;pointer-events:none;z-index:0}
+    .divider{display:flex;align-items:center;gap:12px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-top:18px}
+    .divider::before,.divider::after{content:'';flex:1;height:1px;background:rgba(255,255,255,.08)}
+    .google-slot{min-height:40px;margin-top:14px}
+    .google-note{font-size:12px;color:#94a3b8;text-align:center;margin-top:10px}
   </style>
 </head>
 <body class="bg-slate-900 min-h-screen flex items-center justify-center">
@@ -113,6 +118,10 @@
         <i class="fa-solid fa-user-plus"></i> Sign Up
       </button>
 
+      <div class="divider">or</div>
+      <div id="google-signup-slot" class="google-slot"></div>
+      <div id="google-signup-note" class="google-note" style="display:none"></div>
+
       <div id="signup-otp-box" class="otp-box">
         <label>Enter OTP sent to your email</label>
         <input id="signup-otp" class="agri-input" type="text" placeholder="6-digit code" maxlength="6">
@@ -132,6 +141,9 @@
 const tabLogin=document.getElementById('tab-login'), tabSignup=document.getElementById('tab-signup');
 const loginView=document.getElementById('login-view'), signupView=document.getElementById('signup-view');
 const msgEl=document.getElementById('msg');
+const googleSignupSlot=document.getElementById('google-signup-slot');
+const googleSignupNote=document.getElementById('google-signup-note');
+let googleSignupReady=false;
 
 function showMsg(text,type){msgEl.className='msg '+(type||'err');msgEl.textContent=text;msgEl.style.display='block';}
 function hideMsg(){msgEl.style.display='none';}
@@ -152,6 +164,64 @@ function setButtonBusy(button, busy, busyHtml, idleHtml){
   button.style.opacity = busy ? '.7' : '';
   button.style.pointerEvents = busy ? 'none' : '';
   button.innerHTML = busy ? busyHtml : idleHtml;
+}
+
+function setGoogleSignupNote(text){
+  if(!googleSignupNote) return;
+  googleSignupNote.textContent=text;
+  googleSignupNote.style.display=text?'block':'none';
+}
+
+async function handleGoogleCredentialResponse(response){
+  hideMsg();
+  if(!response||!response.credential){showMsg('Google sign up failed. Please try again.');return;}
+  setGoogleSignupNote('Signing you in with Google...');
+  try{
+    const r=await postJson('/auth/google',{credential:response.credential});
+    if(!r.success){
+      setGoogleSignupNote('');
+      showMsg(r.message||'Google sign up failed');
+      return;
+    }
+    setGoogleSignupNote('Google account verified. Redirecting...');
+    setTimeout(()=>{window.location.href=r.redirect||(r.role==='admin'?'/admin/dashboard':'/home');},300);
+  }catch(e){
+    setGoogleSignupNote('');
+    showMsg('Network error - please try again');
+  }
+}
+
+async function initGoogleSignup(){
+  if(googleSignupReady||!googleSignupSlot) return;
+  try{
+    const cfg=await fetch('/auth/google/config',{credentials:'include'}).then(r=>r.json());
+    if(!cfg||!cfg.enabled||!cfg.client_id){
+      setGoogleSignupNote('Google sign up will appear after GOOGLE_CLIENT_ID is configured on the server.');
+      return;
+    }
+    if(!window.google||!window.google.accounts||!window.google.accounts.id){
+      setGoogleSignupNote('Google sign up could not be loaded right now.');
+      return;
+    }
+    window.google.accounts.id.initialize({
+      client_id: cfg.client_id,
+      callback: handleGoogleCredentialResponse,
+      context: 'signup'
+    });
+    googleSignupSlot.innerHTML='';
+    window.google.accounts.id.renderButton(googleSignupSlot,{
+      theme:'outline',
+      size:'large',
+      shape:'pill',
+      text:'signup_with',
+      width:googleSignupSlot.offsetWidth||320,
+      logo_alignment:'left'
+    });
+    googleSignupReady=true;
+    setGoogleSignupNote('Use your Google account to create or continue with the same email.');
+  }catch(e){
+    setGoogleSignupNote('Google sign up is unavailable right now.');
+  }
 }
 
 // Direct password login
@@ -275,6 +345,8 @@ document.getElementById('btn-verify-signup-otp').addEventListener('click',async(
   const el=document.getElementById(id);
   el&&el.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();document.getElementById(id==='signup-otp'?'btn-verify-signup-otp':'btn-forgot-verify').click();}});
 });
+
+window.addEventListener('load',()=>{initGoogleSignup();});
 
 // Banner if already logged in
 (async function(){
