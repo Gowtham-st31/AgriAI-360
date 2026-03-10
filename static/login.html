@@ -67,6 +67,14 @@
         <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In
       </button>
 
+      <div class="divider">or</div>
+      <div class="google-slot">
+        <button id="btn-google-login" class="btn-ghost" type="button">
+          <i class="fa-brands fa-google"></i> Continue with Google
+        </button>
+      </div>
+      <div id="google-login-note" class="google-note" style="display:none"></div>
+
       <div class="flex justify-between items-center mt-3">
         <span class="text-emerald-400 cursor-pointer text-sm font-medium hover:text-emerald-300 transition-colors" id="to-forgot"><i class="fa-solid fa-key fa-xs mr-1"></i>Forgot password?</span>
         <span class="text-emerald-400 cursor-pointer text-sm font-medium hover:text-emerald-300 transition-colors" id="to-signup-link">Create account <i class="fa-solid fa-arrow-right fa-xs"></i></span>
@@ -146,7 +154,9 @@
 const tabLogin=document.getElementById('tab-login'), tabSignup=document.getElementById('tab-signup');
 const loginView=document.getElementById('login-view'), signupView=document.getElementById('signup-view');
 const msgEl=document.getElementById('msg');
+const googleLoginBtn=document.getElementById('btn-google-login');
 const googleSignupBtn=document.getElementById('btn-google-signup');
+const googleLoginNote=document.getElementById('google-login-note');
 const googleSignupNote=document.getElementById('google-signup-note');
 let firebaseAuth=null;
 let googleSignupReady=false;
@@ -173,17 +183,34 @@ function setButtonBusy(button, busy, busyHtml, idleHtml){
 }
 
 function setGoogleSignupNote(text){
-  if(!googleSignupNote) return;
-  googleSignupNote.textContent=text;
-  googleSignupNote.style.display=text?'block':'none';
+  [googleLoginNote, googleSignupNote].forEach(note=>{
+    if(!note) return;
+    note.textContent=text;
+    note.style.display=text?'block':'none';
+  });
 }
 
-async function completeGoogleServerLogin(firebaseToken){
+function firebaseAuthErrorMessage(error){
+  const code=(error&&error.code)||'';
+  if(code==='auth/popup-closed-by-user') return 'Google popup was closed before sign in completed';
+  if(code==='auth/cancelled-popup-request') return 'Google sign in is already in progress';
+  if(code==='auth/popup-blocked') return 'Google popup was blocked by the browser. Allow popups and try again.';
+  if(code==='auth/unauthorized-domain') return 'This domain is not authorized in Firebase Authentication. Add localhost or your site domain in Firebase console.';
+  if(code==='auth/operation-not-allowed') return 'Google sign-in is not enabled in Firebase Authentication. Enable the Google provider in Firebase console.';
+  if(code==='auth/network-request-failed') return 'Network error while contacting Firebase. Check your connection and try again.';
+  if(code==='auth/account-exists-with-different-credential') return 'An account already exists with this email using a different sign-in method.';
+  if(code){
+    return 'Google sign up failed: '+code;
+  }
+  return 'Google sign up failed. Please try again.';
+}
+
+async function completeGoogleServerLogin(firebaseToken, mode){
   hideMsg();
   if(!firebaseToken){showMsg('Google sign up failed. Please try again.');return;}
   setGoogleSignupNote('Signing you in with Google...');
   try{
-    const r=await postJson('/auth/google',{firebase_token:firebaseToken});
+    const r=await postJson('/auth/google',{firebase_token:firebaseToken,mode:mode||'login'});
     if(!r.success){
       setGoogleSignupNote('');
       showMsg(r.message||'Google sign up failed');
@@ -221,6 +248,14 @@ async function initGoogleSignup(){
 }
 
 googleSignupBtn&&googleSignupBtn.addEventListener('click',async()=>{
+  await handleGoogleAuthClick(googleSignupBtn,'signup');
+});
+
+googleLoginBtn&&googleLoginBtn.addEventListener('click',async()=>{
+  await handleGoogleAuthClick(googleLoginBtn,'login');
+});
+
+async function handleGoogleAuthClick(button, mode){
   hideMsg();
   if(!googleSignupReady){
     await initGoogleSignup();
@@ -231,29 +266,23 @@ googleSignupBtn&&googleSignupBtn.addEventListener('click',async()=>{
   }
 
   const idleHtml='<i class="fa-brands fa-google"></i> Continue with Google';
-  setButtonBusy(googleSignupBtn,true,'<i class="fa-solid fa-spinner fa-spin"></i> Connecting...',idleHtml);
+  setButtonBusy(button,true,'<i class="fa-solid fa-spinner fa-spin"></i> Connecting...',idleHtml);
   setGoogleSignupNote('Opening Google sign in...');
   try{
     const provider=new window.firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({prompt:'select_account'});
     const result=await firebaseAuth.signInWithPopup(provider);
     const firebaseToken=await result.user.getIdToken();
-    await completeGoogleServerLogin(firebaseToken);
+    await completeGoogleServerLogin(firebaseToken,mode);
     await firebaseAuth.signOut().catch(()=>{});
   }catch(e){
     await firebaseAuth.signOut().catch(()=>{});
     setGoogleSignupNote('');
-    if(e&&e.code==='auth/popup-closed-by-user'){
-      showMsg('Google popup was closed before sign in completed');
-    }else if(e&&e.code==='auth/cancelled-popup-request'){
-      showMsg('Google sign in is already in progress');
-    }else{
-      showMsg('Google sign up failed. Please try again.');
-    }
+    showMsg(firebaseAuthErrorMessage(e));
   }finally{
-    setButtonBusy(googleSignupBtn,false,'<i class="fa-solid fa-spinner fa-spin"></i> Connecting...',idleHtml);
+    setButtonBusy(button,false,'<i class="fa-solid fa-spinner fa-spin"></i> Connecting...',idleHtml);
   }
-});
+}
 
 // Direct password login
 document.getElementById('btn-login').addEventListener('click',async()=>{

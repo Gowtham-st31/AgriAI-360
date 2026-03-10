@@ -809,6 +809,27 @@ def find_user(email: str):
     return None
 
 
+def find_user_by_google_sub(google_sub: str):
+    sub = (google_sub or '').strip()
+    if not sub:
+        return None
+
+    try:
+        if mongo_db is not None:
+            coll = mongo_db.get_collection('users')
+            doc = coll.find_one({'google_sub': sub}, {'_id': 0})
+            if doc:
+                return doc
+    except Exception as e:
+        print('find_user_by_google_sub -> mongo error:', e)
+
+    users = load_users().get('users', [])
+    for user in users:
+        if (user.get('google_sub') or '').strip() == sub:
+            return user
+    return None
+
+
 def firebase_public_config() -> dict:
     return {
         'apiKey': (os.environ.get('FIREBASE_API_KEY') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['apiKey']).strip(),
@@ -1819,6 +1840,9 @@ def auth_google():
     data = request.get_json() or {}
     firebase_token = (data.get('firebase_token') or '').strip()
     credential = (data.get('credential') or '').strip()
+    mode = (data.get('mode') or 'login').strip().lower()
+    if mode not in ('login', 'signup'):
+        mode = 'login'
     if not firebase_token and not credential:
         return {'success': False, 'message': 'Google credential is required'}, 400
 
@@ -1861,10 +1885,16 @@ def auth_google():
             return {'success': False, 'message': 'Invalid Google token issuer'}, 401
 
     email = (token_info.get('email') or '').strip().lower()
+    google_sub = (token_info.get('sub') or '').strip()
     if not email:
         return {'success': False, 'message': 'Google account email is unavailable'}, 400
     if not token_info.get('email_verified'):
         return {'success': False, 'message': 'Google account email is not verified'}, 400
+
+    if mode == 'signup':
+        existing_user = find_user(email) or find_user_by_google_sub(google_sub)
+        if existing_user:
+            return {'success': False, 'message': 'User already exists. Please sign in.'}, 409
 
     user = upsert_google_user(email, token_info)
     if user is None:
