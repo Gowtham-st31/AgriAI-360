@@ -6,7 +6,8 @@
   <title>AgriAI-360 | Login</title>
   <meta name="google-site-verification" content="xmyUSkVyJ0G2CkvmFuRuNhdMVtLFpUnlI8Q3YOIif9s" />
   <link rel="icon" type="image/png" href="/icons/logo.png">
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -32,7 +33,7 @@
     .blob{position:fixed;border-radius:50%;filter:blur(120px);opacity:.15;pointer-events:none;z-index:0}
     .divider{display:flex;align-items:center;gap:12px;color:#64748b;font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-top:18px}
     .divider::before,.divider::after{content:'';flex:1;height:1px;background:rgba(255,255,255,.08)}
-    .google-slot{min-height:40px;margin-top:14px}
+    .google-slot{margin-top:14px}
     .google-note{font-size:12px;color:#94a3b8;text-align:center;margin-top:10px}
   </style>
 </head>
@@ -119,7 +120,11 @@
       </button>
 
       <div class="divider">or</div>
-      <div id="google-signup-slot" class="google-slot"></div>
+      <div class="google-slot">
+        <button id="btn-google-signup" class="btn-ghost" type="button">
+          <i class="fa-brands fa-google"></i> Continue with Google
+        </button>
+      </div>
       <div id="google-signup-note" class="google-note" style="display:none"></div>
 
       <div id="signup-otp-box" class="otp-box">
@@ -141,8 +146,9 @@
 const tabLogin=document.getElementById('tab-login'), tabSignup=document.getElementById('tab-signup');
 const loginView=document.getElementById('login-view'), signupView=document.getElementById('signup-view');
 const msgEl=document.getElementById('msg');
-const googleSignupSlot=document.getElementById('google-signup-slot');
+const googleSignupBtn=document.getElementById('btn-google-signup');
 const googleSignupNote=document.getElementById('google-signup-note');
+let firebaseAuth=null;
 let googleSignupReady=false;
 
 function showMsg(text,type){msgEl.className='msg '+(type||'err');msgEl.textContent=text;msgEl.style.display='block';}
@@ -172,12 +178,12 @@ function setGoogleSignupNote(text){
   googleSignupNote.style.display=text?'block':'none';
 }
 
-async function handleGoogleCredentialResponse(response){
+async function completeGoogleServerLogin(firebaseToken){
   hideMsg();
-  if(!response||!response.credential){showMsg('Google sign up failed. Please try again.');return;}
+  if(!firebaseToken){showMsg('Google sign up failed. Please try again.');return;}
   setGoogleSignupNote('Signing you in with Google...');
   try{
-    const r=await postJson('/auth/google',{credential:response.credential});
+    const r=await postJson('/auth/google',{firebase_token:firebaseToken});
     if(!r.success){
       setGoogleSignupNote('');
       showMsg(r.message||'Google sign up failed');
@@ -192,37 +198,62 @@ async function handleGoogleCredentialResponse(response){
 }
 
 async function initGoogleSignup(){
-  if(googleSignupReady||!googleSignupSlot) return;
+  if(googleSignupReady||!googleSignupBtn) return;
   try{
     const cfg=await fetch('/auth/google/config',{credentials:'include'}).then(r=>r.json());
-    if(!cfg||!cfg.enabled||!cfg.client_id){
-      setGoogleSignupNote('Google sign up will appear after GOOGLE_CLIENT_ID is configured on the server.');
+    if(!cfg||!cfg.enabled||!cfg.firebase){
+      setGoogleSignupNote('Google sign up is not configured on the server.');
       return;
     }
-    if(!window.google||!window.google.accounts||!window.google.accounts.id){
-      setGoogleSignupNote('Google sign up could not be loaded right now.');
+    if(!window.firebase||!window.firebase.initializeApp||!window.firebase.auth){
+      setGoogleSignupNote('Firebase authentication could not be loaded right now.');
       return;
     }
-    window.google.accounts.id.initialize({
-      client_id: cfg.client_id,
-      callback: handleGoogleCredentialResponse,
-      context: 'signup'
-    });
-    googleSignupSlot.innerHTML='';
-    window.google.accounts.id.renderButton(googleSignupSlot,{
-      theme:'outline',
-      size:'large',
-      shape:'pill',
-      text:'signup_with',
-      width:googleSignupSlot.offsetWidth||320,
-      logo_alignment:'left'
-    });
+    if(!window.firebase.apps.length){
+      window.firebase.initializeApp(cfg.firebase);
+    }
+    firebaseAuth=window.firebase.auth();
     googleSignupReady=true;
     setGoogleSignupNote('Use your Google account to create or continue with the same email.');
   }catch(e){
     setGoogleSignupNote('Google sign up is unavailable right now.');
   }
 }
+
+googleSignupBtn&&googleSignupBtn.addEventListener('click',async()=>{
+  hideMsg();
+  if(!googleSignupReady){
+    await initGoogleSignup();
+  }
+  if(!googleSignupReady||!firebaseAuth){
+    showMsg('Google sign up is unavailable right now');
+    return;
+  }
+
+  const idleHtml='<i class="fa-brands fa-google"></i> Continue with Google';
+  setButtonBusy(googleSignupBtn,true,'<i class="fa-solid fa-spinner fa-spin"></i> Connecting...',idleHtml);
+  setGoogleSignupNote('Opening Google sign in...');
+  try{
+    const provider=new window.firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({prompt:'select_account'});
+    const result=await firebaseAuth.signInWithPopup(provider);
+    const firebaseToken=await result.user.getIdToken();
+    await completeGoogleServerLogin(firebaseToken);
+    await firebaseAuth.signOut().catch(()=>{});
+  }catch(e){
+    await firebaseAuth.signOut().catch(()=>{});
+    setGoogleSignupNote('');
+    if(e&&e.code==='auth/popup-closed-by-user'){
+      showMsg('Google popup was closed before sign in completed');
+    }else if(e&&e.code==='auth/cancelled-popup-request'){
+      showMsg('Google sign in is already in progress');
+    }else{
+      showMsg('Google sign up failed. Please try again.');
+    }
+  }finally{
+    setButtonBusy(googleSignupBtn,false,'<i class="fa-solid fa-spinner fa-spin"></i> Connecting...',idleHtml);
+  }
+});
 
 // Direct password login
 document.getElementById('btn-login').addEventListener('click',async()=>{

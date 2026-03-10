@@ -32,6 +32,16 @@ except Exception:
     google_auth_requests = None
     google_id_token = None
 
+FIREBASE_PUBLIC_CONFIG_DEFAULTS = {
+    'apiKey': 'AIzaSyBAYRHwH83zvX8EwAiLKvzPDvrkeYUyAAc',
+    'authDomain': 'agriai360-33883.firebaseapp.com',
+    'projectId': 'agriai360-33883',
+    'storageBucket': 'agriai360-33883.firebasestorage.app',
+    'messagingSenderId': '394654173571',
+    'appId': '1:394654173571:web:3dee063716140c9b290eb6',
+    'measurementId': 'G-Z9Y1Y6W8FV',
+}
+
 # ================== SMTP Mail Config ==================
 # SMTP is configured via environment variables (optionally via .env).
 # See `.env.example` for supported settings.
@@ -799,8 +809,20 @@ def find_user(email: str):
     return None
 
 
-def google_client_id() -> str:
-    return (os.environ.get('GOOGLE_CLIENT_ID') or '').strip()
+def firebase_public_config() -> dict:
+    return {
+        'apiKey': (os.environ.get('FIREBASE_API_KEY') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['apiKey']).strip(),
+        'authDomain': (os.environ.get('FIREBASE_AUTH_DOMAIN') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['authDomain']).strip(),
+        'projectId': (os.environ.get('FIREBASE_PROJECT_ID') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['projectId']).strip(),
+        'storageBucket': (os.environ.get('FIREBASE_STORAGE_BUCKET') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['storageBucket']).strip(),
+        'messagingSenderId': (os.environ.get('FIREBASE_MESSAGING_SENDER_ID') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['messagingSenderId']).strip(),
+        'appId': (os.environ.get('FIREBASE_APP_ID') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['appId']).strip(),
+        'measurementId': (os.environ.get('FIREBASE_MEASUREMENT_ID') or FIREBASE_PUBLIC_CONFIG_DEFAULTS['measurementId']).strip(),
+    }
+
+
+def firebase_project_id() -> str:
+    return (firebase_public_config().get('projectId') or '').strip()
 
 
 def upsert_google_user(email: str, google_claims: dict | None = None):
@@ -1774,40 +1796,69 @@ def register():
 
 @app.route('/auth/google/config')
 def auth_google_config():
-    client_id = google_client_id()
+    firebase_cfg = firebase_public_config()
     return jsonify({
         'success': True,
-        'enabled': bool(client_id and google_id_token and google_auth_requests),
-        'client_id': client_id,
+        'enabled': bool(
+            firebase_cfg.get('apiKey')
+            and firebase_cfg.get('authDomain')
+            and firebase_cfg.get('projectId')
+            and firebase_cfg.get('appId')
+            and google_id_token
+            and google_auth_requests
+        ),
+        'firebase': firebase_cfg,
     })
 
 
 @app.route('/auth/google', methods=['POST'])
 def auth_google():
-    client_id = google_client_id()
-    if not client_id:
-        return {'success': False, 'message': 'Google sign up is not configured on the server'}, 503
     if google_id_token is None or google_auth_requests is None:
         return {'success': False, 'message': 'Google auth dependency is not installed on the server'}, 500
 
     data = request.get_json() or {}
+    firebase_token = (data.get('firebase_token') or '').strip()
     credential = (data.get('credential') or '').strip()
-    if not credential:
+    if not firebase_token and not credential:
         return {'success': False, 'message': 'Google credential is required'}, 400
 
-    try:
-        token_info = google_id_token.verify_oauth2_token(
-            credential,
-            google_auth_requests.Request(),
-            client_id,
-        )
-    except Exception as exc:
-        print(f'[google-auth] token verification failed: {exc}')
-        return {'success': False, 'message': 'Google sign up failed. Please try again.'}, 401
+    request_adapter = google_auth_requests.Request()
+    token_info = None
 
-    issuer = (token_info.get('iss') or '').strip()
-    if issuer not in ('accounts.google.com', 'https://accounts.google.com'):
-        return {'success': False, 'message': 'Invalid Google token issuer'}, 401
+    if firebase_token:
+        project_id = firebase_project_id()
+        if not project_id:
+            return {'success': False, 'message': 'Firebase project is not configured on the server'}, 503
+        try:
+            token_info = google_id_token.verify_firebase_token(
+                firebase_token,
+                request_adapter,
+                project_id,
+            )
+        except Exception as exc:
+            print(f'[firebase-auth] token verification failed: {exc}')
+            return {'success': False, 'message': 'Firebase Google sign up failed. Please try again.'}, 401
+
+        issuer = (token_info.get('iss') or '').strip()
+        expected_issuer = f'https://securetoken.google.com/{project_id}'
+        if issuer != expected_issuer or (token_info.get('aud') or '').strip() != project_id:
+            return {'success': False, 'message': 'Invalid Firebase token issuer'}, 401
+    else:
+        firebase_cfg = firebase_public_config()
+        client_id = (data.get('client_id') or '').strip() or firebase_cfg.get('appId') or ''
+        try:
+            token_info = google_id_token.verify_oauth2_token(
+                credential,
+                request_adapter,
+                client_id,
+            )
+        except Exception as exc:
+            print(f'[google-auth] token verification failed: {exc}')
+            return {'success': False, 'message': 'Google sign up failed. Please try again.'}, 401
+
+        issuer = (token_info.get('iss') or '').strip()
+        if issuer not in ('accounts.google.com', 'https://accounts.google.com'):
+            return {'success': False, 'message': 'Invalid Google token issuer'}, 401
 
     email = (token_info.get('email') or '').strip().lower()
     if not email:
