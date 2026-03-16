@@ -4366,7 +4366,7 @@ def weather_page():
 def api_weather():
     """Proxy endpoint to fetch weather forecast and produce simple advice.
     Accepts query parameters: lat, lon OR q (city name).
-    Uses OpenWeather when WEATHER_API_KEY is configured; otherwise falls back to Open-Meteo.
+    Uses Open-Meteo (free, no API key required).
     Returns the upstream forecast JSON under `forecast` and an `advice` array.
     """
     def _open_meteo_weather_desc(code):
@@ -4507,87 +4507,23 @@ def api_weather():
         }
         return payload, None
 
-    key = os.environ.get('WEATHER_API_KEY')
-    use_open_meteo = not bool((key or '').strip())
-
     lat = request.args.get('lat')
     lon = request.args.get('lon')
     q = request.args.get('q')
     try:
-        payload = None
-        if use_open_meteo:
-            # Fallback provider (no API key): Open-Meteo
-            if (not lat or not lon) and q:
-                lat2, lon2, err = _open_meteo_geocode(q)
-                if err:
-                    return jsonify(err), 502
-                lat, lon = lat2, lon2
-
-            if not lat or not lon:
-                return jsonify({'error': 'Provide lat & lon or q (city name) as query parameters.'}), 400
-
-            payload, err = _open_meteo_fetch_onecall_like(lat, lon)
+        # Open-Meteo: free, no API key required
+        if (not lat or not lon) and q:
+            lat2, lon2, err = _open_meteo_geocode(q)
             if err:
                 return jsonify(err), 502
-        else:
-            # OpenWeather (requires WEATHER_API_KEY)
-            # If no coordinates provided but a query (city) is given, geocode first
-            if (not lat or not lon) and q:
-                geo_url = 'http://api.openweathermap.org/geo/1.0/direct'
-                gr = requests.get(geo_url, params={'q': q, 'limit': 1, 'appid': key}, timeout=10)
-                if gr.status_code in (401, 403):
-                    # Key exists but is rejected; fall back to Open-Meteo geocoding + forecast.
-                    lat2, lon2, err = _open_meteo_geocode(q)
-                    if err:
-                        return jsonify(err), 502
-                    lat, lon = lat2, lon2
-                    payload, err = _open_meteo_fetch_onecall_like(lat, lon)
-                    if err:
-                        return jsonify(err), 502
-                else:
-                    if gr.status_code != 200:
-                        return jsonify({'error': 'Geocoding failed', 'details': gr.text}), 502
-                    gdata = gr.json()
-                    if not gdata:
-                        return jsonify({'error': 'Could not resolve location name'}), 400
-                    lat = gdata[0].get('lat')
-                    lon = gdata[0].get('lon')
+            lat, lon = lat2, lon2
 
-            if not lat or not lon:
-                return jsonify({'error': 'Provide lat & lon or q (city name) as query parameters.'}), 400
+        if not lat or not lon:
+            return jsonify({'error': 'Provide lat & lon or q (city name) as query parameters.'}), 400
 
-            # If we already fell back to Open-Meteo (due to rejected key), skip OpenWeather calls.
-            if payload is None:
-                # One Call API for forecast (exclude minutely & alerts to reduce payload)
-                owm = 'https://api.openweathermap.org/data/2.5/onecall'
-                resp = requests.get(owm, params={'lat': lat, 'lon': lon, 'exclude': 'minutely,alerts', 'units': 'metric', 'appid': key}, timeout=12)
-                if resp.status_code != 200:
-                    # log provider failure and attempt a fallback to 3-hour forecast endpoint
-                    try:
-                        print('[WEATHER] OneCall failed:', resp.status_code, resp.text[:500])
-                    except Exception:
-                        pass
-
-                    if resp.status_code in (401, 403):
-                        # Key exists but is rejected; fall back to Open-Meteo forecast.
-                        payload, err = _open_meteo_fetch_onecall_like(lat, lon)
-                        if err:
-                            return jsonify(err), 502
-                    else:
-                        # fallback to 3-hour forecast which is commonly available on free tier
-                        try:
-                            fb = requests.get('https://api.openweathermap.org/data/2.5/forecast', params={'lat': lat, 'lon': lon, 'units': 'metric', 'appid': key}, timeout=12)
-                            if fb.status_code == 200:
-                                fbp = fb.json()
-                                payload = {'fallback_forecast': fbp}
-                            else:
-                                # return both error snippets for diagnosis
-                                return jsonify({'error': 'Weather provider error', 'onecall_status': resp.status_code, 'onecall_body': resp.text, 'fallback_status': fb.status_code, 'fallback_body': fb.text}), 502
-                        except Exception as e:
-                            print('[WEATHER] Fallback fetch exception', e)
-                            return jsonify({'error': 'Weather provider error', 'details': str(e), 'onecall_status': resp.status_code, 'onecall_body': resp.text}), 502
-                else:
-                    payload = resp.json()
+        payload, err = _open_meteo_fetch_onecall_like(lat, lon)
+        if err:
+            return jsonify(err), 502
 
         # Build a short human-friendly summary for frontends.
         summary = ''
@@ -4606,37 +4542,6 @@ def api_weather():
                     parts.append(f"Next 3 days temps {min_low:.0f}°C–{max_high:.0f}°C")
                 if avg_pop:
                     parts.append(f"Chance of precipitation ~{avg_pop}%")
-                summary = ' — '.join(parts)
-            elif payload.get('fallback_forecast'):
-                # The fallback provides 3-hour 'list' entries. Summarize next 24-48h.
-                fl = payload.get('fallback_forecast', {})
-                entries = fl.get('list', [])[:8]  # next 24h (8 * 3h)
-                temps = [e.get('main', {}).get('temp') for e in entries if e.get('main')]
-                pops = []
-                will_rain = False
-                wind_speeds = []
-                for e in entries:
-                    if e.get('pop') is not None:
-                        pops.append(e.get('pop'))
-                    # providers sometimes include rain object
-                    if e.get('weather') and isinstance(e.get('weather'), list):
-                        wid = (e.get('weather')[0].get('id') or 0)
-                        if 500 <= wid < 700:
-                            will_rain = True
-                    if e.get('wind') and e.get('wind').get('speed') is not None:
-                        wind_speeds.append(e.get('wind').get('speed'))
-                max_t = max([t for t in temps if t is not None], default=None)
-                min_t = min([t for t in temps if t is not None], default=None)
-                avg_pop = round((sum(pops)/len(pops))*100) if pops else 0
-                parts = []
-                if min_t is not None and max_t is not None:
-                    parts.append(f"Next 24h temps {min_t:.0f}°C–{max_t:.0f}°C")
-                if avg_pop:
-                    parts.append(f"Chance of precipitation ~{avg_pop}%")
-                if will_rain:
-                    parts.append('Rain likely within 24h')
-                if wind_speeds:
-                    parts.append(f"Wind up to {max(wind_speeds):.0f} m/s")
                 summary = ' — '.join(parts)
         except Exception:
             summary = ''
