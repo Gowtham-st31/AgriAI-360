@@ -46,7 +46,7 @@
     <div class="flex gap-3 items-stretch search-row" style="flex-direction:row">
       <div class="relative flex-1">
         <i class="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-        <input id="commodityInput" class="agri-input w-full pl-9 pr-4 py-3 rounded-xl text-sm" placeholder="Enter commodity (Tomato, Banana, Onion...)" data-i18n="search.placeholder">
+        <input id="commodityInput" class="agri-input w-full pl-9 pr-4 py-3 rounded-xl text-sm" placeholder="Enter commodity (Tomato, Banana, Onion...)" data-i18n="search.placeholder" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off">
       </div>
       <button id="get-price-btn" onclick="getPrice()" class="px-5 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-semibold text-sm shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40 hover:-translate-y-0.5 transition-all flex items-center gap-2 whitespace-nowrap" data-i18n="market.get">
         <i class="fa-solid fa-magnifying-glass-dollar" id="get-price-btn-icon"></i>
@@ -89,32 +89,12 @@ function resolveSingleCommodityInput(raw) {
   const text = String(raw || '').trim();
   if (!text) return { value: '', error: '' };
 
-  const canonicalRaw = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(text) : text;
-  const rawNormalized = normalizeCommodityToken(canonicalRaw);
-  const knownMap = new Map(KNOWN_COMMODITIES.map(name => [normalizeCommodityToken(name), name]));
-  if (knownMap.has(rawNormalized)) {
-    return { value: knownMap.get(rawNormalized), error: '' };
-  }
-
   const parts = text.split(/[•,;|/\n]+/).map(part => part.trim()).filter(Boolean);
-  const matches = [];
-  for (const part of parts) {
-    const canonicalPart = (typeof window.localizedToCanonical === 'function') ? window.localizedToCanonical(part) : part;
-    const normalizedPart = normalizeCommodityToken(canonicalPart);
-    const match = knownMap.get(normalizedPart);
-    if (match && !matches.includes(match)) {
-      matches.push(match);
-    }
-  }
-
-  if (matches.length === 1) {
-    return { value: matches[0], error: '' };
-  }
-  if (matches.length > 1) {
+  if (parts.length > 1) {
     return { value: '', error: 'Search one commodity only, for example Banana.' };
   }
 
-  return { value: canonicalRaw, error: '' };
+  return { value: text, error: '' };
 }
 
 function setGetPriceLoading(isLoading) {
@@ -142,15 +122,13 @@ async function getPrice() {
   }
   if (!c) { alert("Enter a commodity name!"); return; }
 
-  document.getElementById("commodityInput").value = c;
-
   setGetPriceLoading(true);
   document.getElementById("resultBox").innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
   document.getElementById("aiBox").innerHTML = "";
   document.getElementById("searchMeta").innerHTML = "";
 
   try {
-    const res = await fetch('/price?commodity='+encodeURIComponent(c)+'&ai=1');
+    const res = await fetch('/price?commodity='+encodeURIComponent(c)+'&ai=1&strict=1');
     const data = await res.json();
     if (!data.success) {
       document.getElementById("resultBox").innerHTML = '<div class="text-red-400 text-sm">'+(data.msg || "Could not load data")+'</div>';

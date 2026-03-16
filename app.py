@@ -16,7 +16,7 @@ import time
 import ssl
 import threading
 import base64
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify, send_from_directory, session, redirect, make_response, has_request_context
 from flask_cors import CORS
 from functools import wraps  # 🔥 FIXED
@@ -2840,6 +2840,115 @@ def norm(c: str):
     return c.strip().lower()
 
 
+def _price_cache_ttl_hours() -> int:
+    raw_value = str(os.environ.get('PRICE_CACHE_TTL_HOURS', '24') or '').strip()
+    try:
+        ttl_hours = int(raw_value)
+        return ttl_hours if ttl_hours > 0 else 24
+    except Exception:
+        return 24
+
+
+def _parse_utc_iso_datetime(value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(text)
+    except Exception:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _parse_arrival_date(value):
+    text = str(value or '').strip()
+    if not text:
+        return None
+
+    parsed_iso = _parse_utc_iso_datetime(text)
+    if parsed_iso is not None:
+        return parsed_iso
+
+    for fmt in (
+        '%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%d/%m/%y', '%d-%b-%Y',
+        '%d %b %Y', '%d %B %Y', '%m/%d/%Y'
+    ):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _build_exact_commodity_match(commodity_name: str) -> dict:
+    commodity_text = str(commodity_name or '').strip()
+    return {
+        'requested': commodity_text,
+        'requested_key': _commodity_lookup_key(commodity_text),
+        'resolved': commodity_text,
+        'resolved_key': norm(commodity_text) if commodity_text else '',
+        'match_type': 'exact',
+    }
+
+
+def _is_commodity_cache_stale(entry, ttl_hours=None) -> bool:
+    entry = entry if isinstance(entry, dict) else {}
+    items = entry.get('items') or []
+    if not items:
+        return True
+    if not entry.get('source'):
+        return True
+
+    fetched_at = _parse_utc_iso_datetime(entry.get('fetched_at'))
+    if fetched_at is None:
+        return True
+
+    max_age = timedelta(hours=ttl_hours if ttl_hours is not None else _price_cache_ttl_hours())
+    return (datetime.utcnow() - fetched_at) >= max_age
+
+
+def _select_latest_price_item(items):
+    candidates = [row for row in (items or []) if _coerce_market_numeric((row or {}).get('modal_price')) is not None]
+    if not candidates:
+        candidates = list(items or [])
+    if not candidates:
+        return None
+
+    best_row = candidates[0]
+    best_date = _parse_arrival_date(best_row.get('arrival_date'))
+
+    for row in candidates[1:]:
+        row_date = _parse_arrival_date(row.get('arrival_date'))
+        if row_date is None:
+            continue
+        if best_date is None or row_date > best_date:
+            best_row = row
+            best_date = row_date
+
+    return best_row
+
+
+def _price_response_metadata(entry):
+    entry = entry if isinstance(entry, dict) else {}
+    latest_item = _select_latest_price_item(entry.get('items') or [])
+    latest_price = None
+    arrival_date = None
+    if latest_item:
+        latest_price = _coerce_market_numeric(latest_item.get('modal_price'))
+        arrival_date = latest_item.get('arrival_date')
+
+    return {
+        'latest_price': latest_price,
+        'arrival_date': arrival_date,
+        'fetched_at': entry.get('fetched_at'),
+        'source': entry.get('source'),
+    }
+
+
 DEFAULT_COMMODITY_NAMES = [
     'Tomato', 'Onion', 'Potato', 'Banana', 'Paddy', 'Maize', 'Cotton',
     'Groundnut', 'Sugarcane', 'Turmeric', 'Chilli', 'Coriander'
@@ -3080,30 +3189,42 @@ def fetch_from_datagov(commodity, limit=40):
         print("fetch_from_datagov error:", e)
         return []
 
+
+def fetch_prices_from_upstream(commodity):
+    recs = fetch_from_agmarknet(commodity)
+    if recs:
+        return recs, 'agmarknet'
+
+    recs = fetch_from_datagov(commodity)
+    if recs:
+        return recs, 'fallback'
+
+    return [], None
+
 def update_prices_for_commodity(commodity, force=False):
     cache = load_cache()
     key = norm(commodity)
-    now = datetime.utcnow().isoformat()
+    now = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
     existing = cache.get("commodities", {}).get(key)
-    if existing and not force:
-        last = cache.get("last_updated")
-        if last:
-            try:
-                last_dt = datetime.fromisoformat(last)
-                if datetime.utcnow() - last_dt < timedelta(hours=12):
-                    print("Using recent cache for", key)
-                    return cache
-            except Exception:
-                pass
+    if existing and not force and not _is_commodity_cache_stale(existing):
+        print("Using recent cache for", key)
+        return cache
 
-    recs = fetch_from_agmarknet(commodity)
-    if not recs:
-        recs = fetch_from_datagov(commodity)
+    recs, source = fetch_prices_from_upstream(commodity)
 
-    cache.setdefault("commodities", {})[key] = {
-        "fetched_at": now,
-        "items": recs
-    }
+    if recs:
+        cache.setdefault("commodities", {})[key] = {
+            "fetched_at": now,
+            "items": recs,
+            "source": source,
+        }
+    else:
+        cache.setdefault("commodities", {})[key] = {
+            "fetched_at": (existing or {}).get('fetched_at'),
+            "items": (existing or {}).get('items', []),
+            "source": (existing or {}).get('source'),
+        }
+
     cache["last_updated"] = now
     save_cache(cache)
     return cache
@@ -3994,11 +4115,11 @@ def scheduled_daily_refresh():
     if not commodities:
         for c in ["tomato", "banana", "onion", "potato"]:
             print("Initial scheduled fetch:", c)
-            update_prices_for_commodity(c)
+            update_prices_for_commodity(c, force=True)
     else:
         for c in commodities:
             print("Scheduled refresh:", c)
-            update_prices_for_commodity(c)
+            update_prices_for_commodity(c, force=True)
 
 scheduler.add_job(scheduled_daily_refresh, 'interval', hours=24, next_run_time=datetime.utcnow())
 try:
@@ -4016,19 +4137,24 @@ def price():
         return jsonify({"success": False, "msg": "Commodity required"}), 400
 
     ai_requested = str(request.args.get('ai') or '').lower() in ('1', 'true', 'yes')
+    strict_match = str(request.args.get('strict') or request.args.get('exact') or '').lower() in ('1', 'true', 'yes')
     focus_state = request.args.get('state')
     focus_district = request.args.get('district')
     focus_market = request.args.get('market')
+    cache_ttl_hours = _price_cache_ttl_hours()
 
     cache = load_cache()
-    commodity_match = resolve_commodity_name(commodity, cache=cache)
+    if strict_match:
+        commodity_match = _build_exact_commodity_match(commodity)
+    else:
+        commodity_match = resolve_commodity_name(commodity, cache=cache)
     resolved_commodity = commodity_match.get('resolved') or commodity
     resolved_key = commodity_match.get('resolved_key') or norm(commodity)
 
     data = cache.get("commodities", {}).get(resolved_key, {})
     items = data.get("items", [])
 
-    if not items:
+    if _is_commodity_cache_stale(data, ttl_hours=cache_ttl_hours):
         fetch_candidates = []
         if commodity_match.get('match_type') in ('prefix', 'fuzzy'):
             candidate_pool = (resolved_commodity,)
@@ -4050,10 +4176,12 @@ def price():
             try:
                 update_prices_for_commodity(candidate, force=True)
                 cache = load_cache()
-                refreshed_match = resolve_commodity_name(candidate, cache=cache)
+                refreshed_match = _build_exact_commodity_match(candidate) if strict_match else resolve_commodity_name(candidate, cache=cache)
                 candidate_key = refreshed_match.get('resolved_key') or norm(candidate)
-                items = cache.get("commodities", {}).get(candidate_key, {}).get("items", [])
+                candidate_data = cache.get("commodities", {}).get(candidate_key, {})
+                items = candidate_data.get("items", [])
                 if items:
+                    data = candidate_data
                     resolved_commodity = refreshed_match.get('resolved') or candidate
                     resolved_key = candidate_key
                     commodity_match = {
@@ -4067,9 +4195,17 @@ def price():
             except Exception:
                 continue
 
+    data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
+    items = data.get("items", [])
+    price_meta = _price_response_metadata(data)
+
     resp = {
         "success": True,
         "data": items,
+        "latest_price": price_meta.get('latest_price'),
+        "arrival_date": price_meta.get('arrival_date'),
+        "fetched_at": price_meta.get('fetched_at'),
+        "source": price_meta.get('source'),
         "commodity": {
             "requested": commodity,
             "resolved": resolved_commodity,
@@ -4999,7 +5135,7 @@ def add_com():
     key = norm(name)
     db.setdefault("commodities", {})
     if key not in db["commodities"]:
-        db["commodities"][key] = {"fetched_at": None, "items": []}
+        db["commodities"][key] = {"fetched_at": None, "items": [], "source": None}
         save_cache(db)
     return {"ok": True}
 
