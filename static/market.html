@@ -112,7 +112,7 @@ function setGetPriceLoading(isLoading) {
   button.style.opacity = isLoading ? '.75' : '';
   button.style.cursor = isLoading ? 'default' : '';
   icon.className = isLoading ? 'fa-solid fa-circle-notch fa-spin' : 'fa-solid fa-magnifying-glass-dollar';
-  text.textContent = isLoading ? 'Loading...' : 'Get Prices';
+  text.textContent = isLoading ? 'Fetching latest mandi price...' : 'Get Prices';
 }
 
 async function getPrice() {
@@ -129,7 +129,7 @@ async function getPrice() {
   if (!c) { alert("Enter a commodity name!"); return; }
 
   setGetPriceLoading(true);
-  document.getElementById("resultBox").innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
+  document.getElementById("resultBox").innerHTML = '<div class="text-slate-500 text-sm">Fetching latest mandi price...</div>';
   document.getElementById("aiBox").innerHTML = "";
   document.getElementById("searchMeta").innerHTML = "";
   document.getElementById("updateMeta").innerHTML = "";
@@ -232,9 +232,15 @@ function displayUpdateMeta(payload) {
   const oldCount = Number(payload.old_count || 0);
   const fetchedAt = formatDateTime(payload.fetched_at);
   const lastScrapedAt = formatDateTime(payload.last_scraped_at);
+  const refreshTriggered = payload.refresh_triggered === true;
+  const refreshReason = String(payload.refresh_reason || '').trim();
+  const refreshMsg = refreshTriggered
+    ? '<span class="meta-chip"><i class="fa-solid fa-cloud-arrow-down"></i> Fetch Triggered'+(refreshReason ? ' ('+refreshReason+')' : '')+'</span>'
+    : '';
 
   box.innerHTML = ''
     + '<div class="glass-panel rounded-2xl p-4 flex flex-wrap items-center gap-2">'
+    + refreshMsg
     + '<span class="meta-chip"><i class="fa-regular fa-clock"></i> Last Updated: '+fetchedAt+'</span>'
     + '<span class="meta-chip"><i class="fa-solid fa-rotate"></i> Last Scraped: '+lastScrapedAt+'</span>'
     + '<span class="fresh-badge '+freshnessClass+'">'+freshness+'</span>'

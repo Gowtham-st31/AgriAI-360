@@ -3076,6 +3076,39 @@ def _is_commodity_cache_stale(entry, ttl_hours=None) -> bool:
     return (datetime.utcnow() - fetched_at) >= max_age
 
 
+def _latest_price_date_from_items(items):
+    latest = None
+    for row in (items or []):
+        parsed = _parse_arrival_date((row or {}).get('arrival_date'))
+        if parsed is None:
+            continue
+        row_date = parsed.date()
+        if latest is None or row_date > latest:
+            latest = row_date
+    return latest
+
+
+def _should_refresh_price_entry(entry, ttl_hours=None):
+    entry = entry if isinstance(entry, dict) else {}
+    items = _enrich_market_price_items(entry.get('items') or [])
+    today_date = _today_india_date()
+
+    if not items:
+        return True, 'missing-data'
+
+    latest_price_date = _latest_price_date_from_items(items)
+    if latest_price_date is None:
+        return True, 'invalid-price-date'
+    if latest_price_date < today_date:
+        return True, 'price-date-old'
+
+    # Keep TTL as a secondary safety net while making price_date freshness primary.
+    if _is_commodity_cache_stale(entry, ttl_hours=ttl_hours):
+        return True, 'cache-ttl-expired'
+
+    return False, 'fresh'
+
+
 def _select_latest_price_item(items):
     candidates = [row for row in (items or []) if _coerce_market_numeric((row or {}).get('modal_price')) is not None]
     if not candidates:
@@ -4798,8 +4831,10 @@ def price():
 
     data = cache.get("commodities", {}).get(resolved_key, {})
     items = _enrich_market_price_items(data.get("items", []))
+    refresh_needed, refresh_reason = _should_refresh_price_entry(data, ttl_hours=cache_ttl_hours)
+    refresh_triggered = False
 
-    if _is_commodity_cache_stale(data, ttl_hours=cache_ttl_hours):
+    if refresh_needed:
         fetch_candidates = []
         if commodity_match.get('match_type') in ('prefix', 'fuzzy'):
             candidate_pool = (resolved_commodity,)
@@ -4819,13 +4854,15 @@ def price():
 
         for candidate in fetch_candidates:
             try:
+                refresh_triggered = True
                 update_prices_for_commodity(candidate, force=True)
                 cache = load_cache()
                 refreshed_match = _build_exact_commodity_match(candidate) if strict_match else resolve_commodity_name(candidate, cache=cache)
                 candidate_key = refreshed_match.get('resolved_key') or norm(candidate)
                 candidate_data = cache.get("commodities", {}).get(candidate_key, {})
                 items = _enrich_market_price_items(candidate_data.get("items", []))
-                if items:
+                post_refresh_needed, _ = _should_refresh_price_entry(candidate_data, ttl_hours=cache_ttl_hours)
+                if items and not post_refresh_needed:
                     data = candidate_data
                     resolved_commodity = refreshed_match.get('resolved') or candidate
                     resolved_key = candidate_key
@@ -4839,6 +4876,9 @@ def price():
                     break
             except Exception:
                 continue
+
+                # Always re-read the final resolved key after refresh attempts so we render latest persisted state.
+                data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
 
     data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
     items = _enrich_market_price_items(data.get("items", []))
@@ -4860,7 +4900,9 @@ def price():
             "requested": commodity,
             "resolved": resolved_commodity,
             "match_type": commodity_match.get('match_type') or 'exact',
-        }
+        },
+        "refresh_triggered": refresh_triggered,
+        "refresh_reason": refresh_reason,
     }
     if ai_requested:
         resp['ai'] = gemini_live_price_summary(
