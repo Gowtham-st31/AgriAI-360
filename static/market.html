@@ -24,6 +24,10 @@
     .market-card .value{color:#f1f5f9;font-weight:600}
     .ai-card{background:rgba(16,185,129,.06);border:1px solid rgba(16,185,129,.15);border-radius:14px;padding:16px;margin-bottom:16px}
     .ai-card p{margin:4px 0;font-size:13px;color:#cbd5e1}
+    .meta-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:#e2e8f0}
+    .fresh-badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.02em}
+    .fresh-badge.fresh{background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.4);color:#6ee7b7}
+    .fresh-badge.old{background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.4);color:#fbbf24}
     @media(max-width:640px){
       .search-row{flex-direction:column !important}
     }
@@ -63,6 +67,7 @@
   </div>
 
   <!-- AI Box -->
+  <div id="updateMeta" class="mb-3"></div>
   <div id="searchMeta"></div>
   <div id="aiBox"></div>
 
@@ -118,6 +123,7 @@ async function getPrice() {
     document.getElementById("resultBox").innerHTML = '<div class="text-amber-300 text-sm">'+resolvedInput.error+'</div>';
     document.getElementById("aiBox").innerHTML = '';
     document.getElementById("searchMeta").innerHTML = '';
+    document.getElementById("updateMeta").innerHTML = '';
     return;
   }
   if (!c) { alert("Enter a commodity name!"); return; }
@@ -126,6 +132,7 @@ async function getPrice() {
   document.getElementById("resultBox").innerHTML = '<div class="text-slate-500 text-sm">Loading...</div>';
   document.getElementById("aiBox").innerHTML = "";
   document.getElementById("searchMeta").innerHTML = "";
+  document.getElementById("updateMeta").innerHTML = "";
 
   try {
     const res = await fetch('/price?commodity='+encodeURIComponent(c)+'&ai=1&strict=1');
@@ -135,6 +142,7 @@ async function getPrice() {
       return;
     }
     MARKET_DATA = data.data;
+    displayUpdateMeta(data);
       displayResolvedCommodity(data.commodity);
     displayAiSummary(data.ai);
     displayResults(MARKET_DATA);
@@ -197,11 +205,51 @@ function displayAiSummary(ai) {
     box.innerHTML = '<div class="ai-card"><p><b class="text-emerald-400">Price:</b> <span class="text-white font-bold">'+(currency === 'INR' ? '\u20B9' : '')+price+' / '+unit+'</span></p></div>';
 }
 
+function formatDateTime(ts) {
+  const value = String(ts || '').trim();
+  if (!value) return 'N/A';
+  const normalized = value.endsWith('Z') ? value : (value + 'Z');
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('en-IN', {
+    year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: true
+  });
+}
+
+function displayUpdateMeta(payload) {
+  const box = document.getElementById('updateMeta');
+  if (!box) return;
+  if (!payload || typeof payload !== 'object') {
+    box.innerHTML = '';
+    return;
+  }
+
+  const freshness = String(payload.price_freshness || 'Old');
+  const freshnessClass = freshness === 'Fresh' ? 'fresh' : 'old';
+  const freshCount = Number(payload.fresh_count || 0);
+  const oldCount = Number(payload.old_count || 0);
+  const fetchedAt = formatDateTime(payload.fetched_at);
+  const lastScrapedAt = formatDateTime(payload.last_scraped_at);
+
+  box.innerHTML = ''
+    + '<div class="glass-panel rounded-2xl p-4 flex flex-wrap items-center gap-2">'
+    + '<span class="meta-chip"><i class="fa-regular fa-clock"></i> Last Updated: '+fetchedAt+'</span>'
+    + '<span class="meta-chip"><i class="fa-solid fa-rotate"></i> Last Scraped: '+lastScrapedAt+'</span>'
+    + '<span class="fresh-badge '+freshnessClass+'">'+freshness+'</span>'
+    + '<span class="meta-chip"><i class="fa-solid fa-seedling"></i> Fresh: '+freshCount+'</span>'
+    + '<span class="meta-chip"><i class="fa-regular fa-calendar"></i> Old: '+oldCount+'</span>'
+    + '</div>';
+}
+
 function displayResults(data) {
     let html = "";
     if (data.length === 0) { html = '<div class="text-slate-500 text-sm italic">No data available for this commodity.</div>'; }
 
     data.forEach(m => {
+      const itemFreshness = String(m.price_freshness || 'Old');
+      const itemFreshnessClass = itemFreshness === 'Fresh' ? 'fresh' : 'old';
         html += '<div class="market-card">'
             +'<p data-label="market"><b class="label">'+(window.__t&&window.__t('label.market')||'Market:')+'</b> <span class="value">'+m.market+'</span></p>'
             +'<p data-label="district"><b class="label">'+(window.__t&&window.__t('label.district')||'District:')+'</b> <span class="value">'+m.district+'</span></p>'
@@ -211,7 +259,8 @@ function displayResults(data) {
             +'<p data-label="min_price"><b class="label">'+(window.__t&&window.__t('label.min_price')||'Min Price:')+'</b> <span class="value text-emerald-400">\u20B9'+m.min_price+' / 100kg</span></p>'
             +'<p data-label="max_price"><b class="label">'+(window.__t&&window.__t('label.max_price')||'Max Price:')+'</b> <span class="value text-emerald-400">\u20B9'+m.max_price+' / 100kg</span></p>'
             +'<p data-label="modal_price"><b class="label">'+(window.__t&&window.__t('label.modal_price')||'Modal Price:')+'</b> <span class="value text-white font-bold">\u20B9'+m.modal_price+' / 100kg</span></p>'
-            +'<p data-label="date"><b class="label">'+(window.__t&&window.__t('label.date')||'Date:')+'</b> <span class="value">'+m.arrival_date+'</span></p>'
+        +'<p data-label="date"><b class="label">'+(window.__t&&window.__t('label.date')||'Date:')+'</b> <span class="value">'+(m.arrival_date||'N/A')+'</span></p>'
+        +'<p data-label="freshness"><b class="label">Price Status:</b> <span class="fresh-badge '+itemFreshnessClass+'">'+itemFreshness+'</span></p>'
             +'</div>';
     });
 

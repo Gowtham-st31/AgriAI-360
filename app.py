@@ -373,6 +373,48 @@ else:
     if MONGODB_URI and MongoClient is None:
         print('MONGODB_URI provided but pymongo not installed; install pymongo in requirements')
 
+PRICE_COLLECTION = 'prices'
+PRICE_META_DOC_ID = '__meta__'
+PRICE_SCHEMA_VERSION = 2
+INDIA_TZ = timezone(timedelta(hours=5, minutes=30))
+MANDI_PRICE_LATEST_COLLECTION = 'mandi_prices_latest'
+MANDI_PRICE_HISTORY_COLLECTION = 'mandi_prices_history'
+
+
+def _ensure_price_indexes():
+    if mongo_db is None:
+        return
+    try:
+        coll = mongo_db.get_collection(PRICE_COLLECTION)
+        coll.create_index('key', unique=True, sparse=True)
+        coll.create_index('fetched_at')
+        coll.create_index('last_scraped_at')
+        coll.create_index('items_hash')
+    except Exception as e:
+        print('ensure price indexes error:', e)
+
+    try:
+        latest_coll = mongo_db.get_collection(MANDI_PRICE_LATEST_COLLECTION)
+        history_coll = mongo_db.get_collection(MANDI_PRICE_HISTORY_COLLECTION)
+
+        latest_coll.create_index('natural_key', unique=True)
+        latest_coll.create_index('state')
+        latest_coll.create_index('district')
+        latest_coll.create_index('market')
+        latest_coll.create_index('commodity')
+        latest_coll.create_index('price_date')
+        latest_coll.create_index('last_scraped_at')
+
+        history_coll.create_index('history_key', unique=True)
+        history_coll.create_index('natural_key')
+        history_coll.create_index('price_date')
+        history_coll.create_index('recorded_at')
+    except Exception as e:
+        print('ensure mandi history indexes error:', e)
+
+
+_ensure_price_indexes()
+
 # -----------------------------------------------------
 #   DISEASE CLASS LIST (38 CLASSES)
 # -----------------------------------------------------
@@ -2803,15 +2845,81 @@ def _merge_price_caches(primary, fallback):
 
     return merged
 
+
+def _json_sha256(payload) -> str:
+    try:
+        serialized = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    except Exception:
+        serialized = str(payload)
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
+
+def _today_india_date():
+    return datetime.now(INDIA_TZ).date()
+
+
+def _normalize_price_date(value):
+    parsed = _parse_arrival_date(value)
+    if parsed is None:
+        return ''
+    return parsed.date().isoformat()
+
+
+def _arrival_freshness(value, today_date=None):
+    parsed = _parse_arrival_date(value)
+    if parsed is None:
+        return 'Old'
+    if today_date is None:
+        today_date = _today_india_date()
+    return 'Fresh' if parsed.date() == today_date else 'Old'
+
+
+def _enrich_market_price_item(item, today_date=None):
+    base = dict(item or {})
+    if today_date is None:
+        today_date = _today_india_date()
+    base['price_date'] = _normalize_price_date(base.get('arrival_date'))
+    base['price_freshness'] = _arrival_freshness(base.get('arrival_date'), today_date=today_date)
+    return base
+
+
+def _enrich_market_price_items(items):
+    today_date = _today_india_date()
+    return [_enrich_market_price_item(row, today_date=today_date) for row in (items or [])]
+
 def load_cache():
     # Prefer Mongo-stored cache when available
     mongo_cache = None
     try:
         if mongo_db is not None:
-            coll = mongo_db.get_collection('prices')
-            doc = coll.find_one({}, {'_id': 0})
-            if doc and 'cache' in doc:
-                mongo_cache = doc['cache']
+            coll = mongo_db.get_collection(PRICE_COLLECTION)
+            meta_doc = coll.find_one({'_id': PRICE_META_DOC_ID}, {'_id': 0}) or {}
+            cache = {
+                'last_updated': meta_doc.get('last_updated'),
+                'last_scraped_at': meta_doc.get('last_scraped_at'),
+                'commodities': {},
+            }
+
+            docs = list(coll.find({'key': {'$exists': True}}, {'_id': 0}))
+            for doc in docs:
+                key = norm(doc.get('key') or '')
+                if not key:
+                    continue
+                cache['commodities'][key] = {
+                    'fetched_at': doc.get('fetched_at'),
+                    'last_scraped_at': doc.get('last_scraped_at'),
+                    'items': _enrich_market_price_items(doc.get('items') or []),
+                    'source': doc.get('source'),
+                    'items_hash': doc.get('items_hash'),
+                }
+
+            # Backward compatibility: legacy single-cache document.
+            if not cache['commodities']:
+                legacy_doc = coll.find_one({'cache': {'$exists': True}}, {'_id': 0, 'cache': 1})
+                if legacy_doc and isinstance(legacy_doc.get('cache'), dict):
+                    mongo_cache = legacy_doc.get('cache')
+            else:
+                mongo_cache = cache
     except Exception as e:
         print('load_cache -> mongo error:', e)
 
@@ -2824,9 +2932,66 @@ def save_cache(cache):
     # Prefer storing cache to Mongo when available
     try:
         if mongo_db is not None:
-            coll = mongo_db.get_collection('prices')
-            coll.delete_many({})
-            coll.insert_one({'cache': cache})
+            coll = mongo_db.get_collection(PRICE_COLLECTION)
+            commodities = (cache or {}).get('commodities') or {}
+            now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+
+            keys = [norm(k) for k in commodities.keys() if norm(k)]
+            existing_docs = {}
+            if keys:
+                for doc in coll.find({'key': {'$in': keys}}, {'_id': 0, 'key': 1, 'items_hash': 1, 'fetched_at': 1, 'last_scraped_at': 1, 'source': 1}):
+                    existing_docs[norm(doc.get('key') or '')] = doc
+
+            for key_raw, entry_raw in commodities.items():
+                key = norm(key_raw)
+                if not key:
+                    continue
+                entry = entry_raw if isinstance(entry_raw, dict) else {}
+                items = _enrich_market_price_items(entry.get('items') or [])
+                items_hash = _json_sha256(items)
+                doc = {
+                    'key': key,
+                    'items': items,
+                    'items_hash': items_hash,
+                    'source': entry.get('source'),
+                    'fetched_at': entry.get('fetched_at'),
+                    'last_scraped_at': entry.get('last_scraped_at'),
+                    'updated_at': now_iso,
+                }
+
+                existing = existing_docs.get(key) or {}
+                is_unchanged = (
+                    existing.get('items_hash') == doc.get('items_hash') and
+                    existing.get('fetched_at') == doc.get('fetched_at') and
+                    existing.get('last_scraped_at') == doc.get('last_scraped_at') and
+                    existing.get('source') == doc.get('source')
+                )
+                if is_unchanged:
+                    continue
+
+                coll.update_one(
+                    {'key': key},
+                    {
+                        '$set': doc,
+                        '$setOnInsert': {'created_at': now_iso}
+                    },
+                    upsert=True
+                )
+
+            coll.update_one(
+                {'_id': PRICE_META_DOC_ID},
+                {
+                    '$set': {
+                        '_id': PRICE_META_DOC_ID,
+                        'schema_version': PRICE_SCHEMA_VERSION,
+                        'last_updated': (cache or {}).get('last_updated') or now_iso,
+                        'last_scraped_at': (cache or {}).get('last_scraped_at') or now_iso,
+                        'updated_at': now_iso,
+                    },
+                    '$setOnInsert': {'created_at': now_iso},
+                },
+                upsert=True,
+            )
             return
     except Exception as e:
         print('save_cache -> mongo error:', e)
@@ -2841,12 +3006,12 @@ def norm(c: str):
 
 
 def _price_cache_ttl_hours() -> int:
-    raw_value = str(os.environ.get('PRICE_CACHE_TTL_HOURS', '24') or '').strip()
+    raw_value = str(os.environ.get('PRICE_CACHE_TTL_HOURS', '1') or '').strip()
     try:
         ttl_hours = int(raw_value)
-        return ttl_hours if ttl_hours > 0 else 24
+        return ttl_hours if ttl_hours > 0 else 1
     except Exception:
-        return 24
+        return 1
 
 
 def _parse_utc_iso_datetime(value):
@@ -2934,17 +3099,34 @@ def _select_latest_price_item(items):
 
 def _price_response_metadata(entry):
     entry = entry if isinstance(entry, dict) else {}
-    latest_item = _select_latest_price_item(entry.get('items') or [])
+    items = _enrich_market_price_items(entry.get('items') or [])
+    latest_item = _select_latest_price_item(items)
     latest_price = None
     arrival_date = None
+    freshness_status = 'Old'
+    fresh_count = 0
+    old_count = 0
     if latest_item:
         latest_price = _coerce_market_numeric(latest_item.get('modal_price'))
         arrival_date = latest_item.get('arrival_date')
+        freshness_status = latest_item.get('price_freshness') or _arrival_freshness(arrival_date)
+
+    for row in items:
+        status = str(row.get('price_freshness') or '').strip() or _arrival_freshness(row.get('arrival_date'))
+        if status == 'Fresh':
+            fresh_count += 1
+        else:
+            old_count += 1
 
     return {
         'latest_price': latest_price,
         'arrival_date': arrival_date,
+        'price_date': _normalize_price_date(arrival_date),
+        'price_freshness': freshness_status,
+        'fresh_count': fresh_count,
+        'old_count': old_count,
         'fetched_at': entry.get('fetched_at'),
+        'last_scraped_at': entry.get('last_scraped_at'),
         'source': entry.get('source'),
     }
 
@@ -3064,6 +3246,301 @@ AGMARKNET_SEARCH_URL = "https://agmarknet.gov.in/SearchCmmMkt.aspx?CommName={com
 AGMARKNET_COMMODITY_URL = "https://agmarknet.gov.in/PriceAndArrivals/CommodityWisePrices.aspx?CommName={commodity}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; FarmerAssistant/1.0; +http://localhost/)"}
 
+
+def _http_retry_count() -> int:
+    raw = str(os.environ.get('AGMARKNET_HTTP_RETRIES', '3') or '').strip()
+    try:
+        val = int(raw)
+        return val if val > 0 else 3
+    except Exception:
+        return 3
+
+
+def _http_timeout_seconds() -> int:
+    raw = str(os.environ.get('AGMARKNET_HTTP_TIMEOUT_SECONDS', '15') or '').strip()
+    try:
+        val = int(raw)
+        return val if val > 0 else 15
+    except Exception:
+        return 15
+
+
+def _agmarknet_max_pages() -> int:
+    raw = str(os.environ.get('AGMARKNET_MAX_PAGES', '30') or '').strip()
+    try:
+        val = int(raw)
+        return val if val > 0 else 30
+    except Exception:
+        return 30
+
+
+def _request_with_retry(session_obj, method, url, *, params=None, data=None, headers=None):
+    retries = _http_retry_count()
+    timeout = _http_timeout_seconds()
+    final_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            response = session_obj.request(method=method, url=url, params=params, data=data, headers=headers, timeout=timeout)
+            if response.status_code == 200:
+                return response
+            final_error = RuntimeError(f'HTTP {response.status_code}')
+        except Exception as e:
+            final_error = e
+
+        if attempt < retries:
+            time.sleep(min(0.5 * (2 ** (attempt - 1)), 4.0))
+
+    raise final_error if final_error is not None else RuntimeError('request failed')
+
+
+def _agmarknet_hidden_fields(soup):
+    form = soup.find('form')
+    if form is None:
+        return {}
+    fields = {}
+    for inp in form.find_all('input'):
+        input_type = str(inp.get('type') or '').lower()
+        name = str(inp.get('name') or '').strip()
+        if not name:
+            continue
+        if input_type in ('hidden', 'text', 'search'):
+            fields[name] = inp.get('value') or ''
+    return fields
+
+
+def _agmarknet_extract_pager_targets(soup):
+    targets = []
+    for a in soup.find_all('a'):
+        href = str(a.get('href') or '').strip()
+        if '__doPostBack' not in href:
+            continue
+        m = re.search(r"__doPostBack\('([^']*)','([^']*)'\)", href)
+        if not m:
+            continue
+        event_target = m.group(1)
+        event_argument = m.group(2)
+        if not event_argument.startswith('Page$'):
+            continue
+        page_num = 0
+        try:
+            page_num = int(event_argument.split('$', 1)[1])
+        except Exception:
+            page_num = 0
+        targets.append((page_num, event_target, event_argument))
+
+    targets.sort(key=lambda x: (x[0] if x[0] > 0 else 999999, x[1], x[2]))
+    unique = []
+    seen = set()
+    for page_num, event_target, event_argument in targets:
+        key = (event_target, event_argument)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((page_num, event_target, event_argument))
+    return unique
+
+
+def _coerce_price_number(v):
+    if isinstance(v, (int, float)):
+        return float(v)
+    text = str(v or '').strip()
+    if not text:
+        return None
+    text = text.replace(',', '')
+    m = re.search(r'-?\d+(?:\.\d+)?', text)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except Exception:
+        return None
+
+
+def _normalize_unit_text(unit_text):
+    u = str(unit_text or '').strip().lower()
+    if not u:
+        return 'INR/quintal'
+    if 'quintal' in u or '/q' in u or 'qtl' in u:
+        return 'INR/quintal'
+    if '/kg' in u or 'kilogram' in u or 'per kg' in u:
+        return 'INR/kg'
+    return 'INR/quintal'
+
+
+def _to_inr_per_kg(value, base_unit):
+    num = _coerce_price_number(value)
+    if num is None:
+        return None
+    if base_unit == 'INR/quintal':
+        return round(num / 100.0, 4)
+    return round(num, 4)
+
+
+def _normalize_market_key_part(value):
+    s = str(value or '').strip().lower()
+    s = re.sub(r'\s+', ' ', s)
+    return s
+
+
+def _build_mandi_natural_key(record):
+    parts = [
+        _normalize_market_key_part(record.get('state')),
+        _normalize_market_key_part(record.get('district')),
+        _normalize_market_key_part(record.get('market')),
+        _normalize_market_key_part(record.get('commodity')),
+        _normalize_market_key_part(record.get('variety')),
+        _normalize_market_key_part(record.get('grade')),
+    ]
+    return '|'.join(parts)
+
+
+def _build_mandi_history_key(record):
+    parts = [
+        _build_mandi_natural_key(record),
+        str(record.get('price_date') or ''),
+        str(record.get('min_price') if record.get('min_price') is not None else ''),
+        str(record.get('max_price') if record.get('max_price') is not None else ''),
+        str(record.get('modal_price') if record.get('modal_price') is not None else ''),
+    ]
+    return hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()
+
+
+def _persist_mandi_price_history(commodity, records, source, scraped_at):
+    summary = {
+        'inserted': 0,
+        'updated': 0,
+        'unchanged': 0,
+        'history_inserted': 0,
+        'history_unchanged': 0,
+        'errors': 0,
+        'total': 0,
+    }
+
+    if mongo_db is None:
+        return summary
+
+    latest_coll = mongo_db.get_collection(MANDI_PRICE_LATEST_COLLECTION)
+    history_coll = mongo_db.get_collection(MANDI_PRICE_HISTORY_COLLECTION)
+    now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
+
+    seen_history_keys = set()
+    for row in (records or []):
+        try:
+            rec = dict(row or {})
+            rec['commodity'] = str(rec.get('commodity') or commodity or '').strip()
+            rec['state'] = str(rec.get('state') or '').strip()
+            rec['district'] = str(rec.get('district') or '').strip()
+            rec['market'] = str(rec.get('market') or '').strip()
+            rec['variety'] = str(rec.get('variety') or '').strip()
+            rec['grade'] = str(rec.get('grade') or '').strip()
+            rec['price_date'] = _normalize_price_date(rec.get('arrival_date'))
+            rec['source'] = source
+            rec['last_scraped_at'] = scraped_at
+            rec['recorded_at'] = now_iso
+
+            rec['min_price'] = _coerce_price_number(rec.get('min_price'))
+            rec['max_price'] = _coerce_price_number(rec.get('max_price'))
+            rec['modal_price'] = _coerce_price_number(rec.get('modal_price'))
+
+            base_unit = _normalize_unit_text(rec.get('price_unit_raw') or rec.get('price_unit'))
+            rec['price_unit_base'] = base_unit
+            rec['price_unit'] = 'INR/kg'
+            rec['min_price_per_kg'] = _to_inr_per_kg(rec.get('min_price'), base_unit)
+            rec['max_price_per_kg'] = _to_inr_per_kg(rec.get('max_price'), base_unit)
+            rec['modal_price_per_kg'] = _to_inr_per_kg(rec.get('modal_price'), base_unit)
+
+            natural_key = _build_mandi_natural_key(rec)
+            rec['natural_key'] = natural_key
+
+            existing = latest_coll.find_one({'natural_key': natural_key}, {'_id': 0, 'price_date': 1, 'min_price': 1, 'max_price': 1, 'modal_price': 1})
+            is_insert = existing is None
+            is_changed = is_insert or any([
+                str(existing.get('price_date') or '') != str(rec.get('price_date') or ''),
+                _coerce_price_number(existing.get('min_price')) != _coerce_price_number(rec.get('min_price')),
+                _coerce_price_number(existing.get('max_price')) != _coerce_price_number(rec.get('max_price')),
+                _coerce_price_number(existing.get('modal_price')) != _coerce_price_number(rec.get('modal_price')),
+            ])
+
+            latest_doc = {
+                'natural_key': natural_key,
+                'state': rec.get('state'),
+                'district': rec.get('district'),
+                'market': rec.get('market'),
+                'commodity': rec.get('commodity'),
+                'variety': rec.get('variety'),
+                'grade': rec.get('grade'),
+                'arrival_date': rec.get('arrival_date'),
+                'price_date': rec.get('price_date'),
+                'min_price': rec.get('min_price'),
+                'max_price': rec.get('max_price'),
+                'modal_price': rec.get('modal_price'),
+                'price_unit_base': rec.get('price_unit_base'),
+                'price_unit': rec.get('price_unit'),
+                'min_price_per_kg': rec.get('min_price_per_kg'),
+                'max_price_per_kg': rec.get('max_price_per_kg'),
+                'modal_price_per_kg': rec.get('modal_price_per_kg'),
+                'source': source,
+                'last_scraped_at': scraped_at,
+                'updated_at': now_iso,
+            }
+            latest_coll.update_one(
+                {'natural_key': natural_key},
+                {'$set': latest_doc, '$setOnInsert': {'created_at': now_iso}},
+                upsert=True,
+            )
+
+            if is_insert:
+                summary['inserted'] += 1
+            elif is_changed:
+                summary['updated'] += 1
+            else:
+                summary['unchanged'] += 1
+
+            history_key = _build_mandi_history_key(rec)
+            if history_key in seen_history_keys:
+                summary['history_unchanged'] += 1
+            else:
+                seen_history_keys.add(history_key)
+                history_doc = {
+                    'history_key': history_key,
+                    'natural_key': natural_key,
+                    'state': rec.get('state'),
+                    'district': rec.get('district'),
+                    'market': rec.get('market'),
+                    'commodity': rec.get('commodity'),
+                    'variety': rec.get('variety'),
+                    'grade': rec.get('grade'),
+                    'arrival_date': rec.get('arrival_date'),
+                    'price_date': rec.get('price_date'),
+                    'min_price': rec.get('min_price'),
+                    'max_price': rec.get('max_price'),
+                    'modal_price': rec.get('modal_price'),
+                    'price_unit_base': rec.get('price_unit_base'),
+                    'price_unit': rec.get('price_unit'),
+                    'min_price_per_kg': rec.get('min_price_per_kg'),
+                    'max_price_per_kg': rec.get('max_price_per_kg'),
+                    'modal_price_per_kg': rec.get('modal_price_per_kg'),
+                    'source': source,
+                    'recorded_at': now_iso,
+                    'last_scraped_at': scraped_at,
+                }
+                hres = history_coll.update_one(
+                    {'history_key': history_key},
+                    {'$setOnInsert': history_doc},
+                    upsert=True,
+                )
+                if getattr(hres, 'upserted_id', None) is not None:
+                    summary['history_inserted'] += 1
+                else:
+                    summary['history_unchanged'] += 1
+
+            summary['total'] += 1
+        except Exception as e:
+            summary['errors'] += 1
+            print('persist mandi history row error:', e)
+
+    return summary
+
 def parse_price_table_from_soup(soup):
     table = None
     for tid in ["DataGrid1", "gvPrices", "ctl00_ContentPlaceHolder1_gvPrice"]:
@@ -3080,6 +3557,34 @@ def parse_price_table_from_soup(soup):
         return []
 
     headers = [th.get_text(strip=True).lower() for th in table.find_all("th")]
+
+    def canonical_header(h):
+        s = str(h or '').strip().lower()
+        s = re.sub(r'\s+', ' ', s)
+        if 'market' in s:
+            return 'market'
+        if 'district' in s:
+            return 'district'
+        if 'state' in s:
+            return 'state'
+        if 'variety' in s:
+            return 'variety'
+        if 'grade' in s:
+            return 'grade'
+        if ('min' in s and 'price' in s) or 'minimum price' in s:
+            return 'min_price'
+        if ('max' in s and 'price' in s) or 'maximum price' in s:
+            return 'max_price'
+        if ('modal' in s and 'price' in s):
+            return 'modal_price'
+        if 'arrival' in s and 'date' in s:
+            return 'arrival_date'
+        if 'unit' in s:
+            return 'price_unit_raw'
+        return s.replace(' ', '_')
+
+    canonical_headers = [canonical_header(h) for h in headers]
+    inferred_unit = 'Rs./Quintal' if any('price' in h and 'quintal' in h for h in headers) else ''
     rows_out = []
     for tr in table.find_all("tr"):
         tds = tr.find_all("td")
@@ -3089,9 +3594,9 @@ def parse_price_table_from_soup(soup):
         n = len(texts)
         rec = {}
         if n >= 6:
-            if "market" in headers:
-                for i, h in enumerate(headers[:n]):
-                    key = h.replace(" ", "_")
+            if "market" in canonical_headers:
+                for i, h in enumerate(canonical_headers[:n]):
+                    key = h
                     rec[key] = texts[i]
             else:
                 rec["market"] = texts[0]
@@ -3124,6 +3629,7 @@ def parse_price_table_from_soup(soup):
         rec.setdefault("district", rec.get("district", ""))
         rec.setdefault("state", rec.get("state", ""))
         rec.setdefault("arrival_date", rec.get("arrival_date", ""))
+        rec.setdefault("price_unit_raw", rec.get("price_unit_raw") or inferred_unit or "Rs./Quintal")
 
         rows_out.append(rec)
     return rows_out
@@ -3134,20 +3640,90 @@ def fetch_from_agmarknet(commodity):
         AGMARKNET_COMMODITY_URL.format(commodity=c),
         AGMARKNET_SEARCH_URL.format(commodity=c)
     ]
+    session_obj = requests.Session()
     for url in try_urls:
         try:
-            r = requests.get(url, headers=HEADERS, timeout=12)
-            if r.status_code != 200:
-                continue
+            response = _request_with_retry(session_obj, 'GET', url, headers=HEADERS)
             try:
-                soup = BeautifulSoup(r.text, "lxml")
+                soup = BeautifulSoup(response.text, "lxml")
             except FeatureNotFound:
-                soup = BeautifulSoup(r.text, "html.parser")
-            recs = parse_price_table_from_soup(soup)
-            if recs:
-                for rec in recs:
-                    rec["commodity"] = commodity
-                return recs
+                soup = BeautifulSoup(response.text, "html.parser")
+
+            all_rows = []
+            seen_row_keys = set()
+
+            def add_rows(rows):
+                for rec in (rows or []):
+                    row = dict(rec or {})
+                    row['commodity'] = commodity
+                    base_unit = _normalize_unit_text(row.get('price_unit_raw') or row.get('price_unit'))
+                    row['price_unit_base'] = base_unit
+                    row['price_unit'] = 'INR/kg'
+                    row['min_price_per_kg'] = _to_inr_per_kg(row.get('min_price'), base_unit)
+                    row['max_price_per_kg'] = _to_inr_per_kg(row.get('max_price'), base_unit)
+                    row['modal_price_per_kg'] = _to_inr_per_kg(row.get('modal_price'), base_unit)
+                    key = _json_sha256([
+                        _normalize_market_key_part(row.get('state')),
+                        _normalize_market_key_part(row.get('district')),
+                        _normalize_market_key_part(row.get('market')),
+                        _normalize_market_key_part(row.get('commodity')),
+                        _normalize_market_key_part(row.get('variety')),
+                        _normalize_market_key_part(row.get('grade')),
+                        str(row.get('arrival_date') or ''),
+                        str(row.get('min_price') or ''),
+                        str(row.get('max_price') or ''),
+                        str(row.get('modal_price') or ''),
+                    ])
+                    if key in seen_row_keys:
+                        continue
+                    seen_row_keys.add(key)
+                    all_rows.append(row)
+
+            add_rows(parse_price_table_from_soup(soup))
+
+            queue = []
+            visited_targets = set()
+            max_pages = _agmarknet_max_pages()
+
+            def enqueue_from_soup(page_soup):
+                hidden = _agmarknet_hidden_fields(page_soup)
+                for _, event_target, event_argument in _agmarknet_extract_pager_targets(page_soup):
+                    tkey = (event_target, event_argument)
+                    if tkey in visited_targets:
+                        continue
+                    queue.append((event_target, event_argument, dict(hidden)))
+
+            enqueue_from_soup(soup)
+            pages_fetched = 1
+
+            while queue and pages_fetched < max_pages:
+                event_target, event_argument, hidden_fields = queue.pop(0)
+                target_key = (event_target, event_argument)
+                if target_key in visited_targets:
+                    continue
+                visited_targets.add(target_key)
+
+                payload = dict(hidden_fields)
+                payload['__EVENTTARGET'] = event_target
+                payload['__EVENTARGUMENT'] = event_argument
+
+                try:
+                    page_resp = _request_with_retry(session_obj, 'POST', url, data=payload, headers=HEADERS)
+                except Exception as e:
+                    print('agmarknet page fetch error for', event_argument, ':', e)
+                    continue
+
+                try:
+                    page_soup = BeautifulSoup(page_resp.text, "lxml")
+                except FeatureNotFound:
+                    page_soup = BeautifulSoup(page_resp.text, "html.parser")
+
+                add_rows(parse_price_table_from_soup(page_soup))
+                enqueue_from_soup(page_soup)
+                pages_fetched += 1
+
+            if all_rows:
+                return all_rows
         except Exception as e:
             print("agmarknet fetch error for", url, ":", e)
             continue
@@ -3172,6 +3748,8 @@ def fetch_from_datagov(commodity, limit=40):
         recs = j.get("records", [])
         out = []
         for d in recs:
+            unit_raw = d.get('price_unit') or d.get('unit') or 'Rs./Quintal'
+            base_unit = _normalize_unit_text(unit_raw)
             rec = {
                 "market": d.get("market", ""),
                 "district": d.get("district", ""),
@@ -3181,8 +3759,14 @@ def fetch_from_datagov(commodity, limit=40):
                 "min_price": int(d.get("min_price")) if d.get("min_price") and str(d.get("min_price")).isdigit() else None,
                 "max_price": int(d.get("max_price")) if d.get("max_price") and str(d.get("max_price")).isdigit() else None,
                 "modal_price": int(d.get("modal_price")) if d.get("modal_price") and str(d.get("modal_price")).isdigit() else None,
-                "arrival_date": d.get("arrival_date") or d.get("date")
+                "arrival_date": d.get("arrival_date") or d.get("date"),
+                "price_unit_raw": unit_raw,
+                "price_unit_base": base_unit,
+                "price_unit": 'INR/kg',
             }
+            rec['min_price_per_kg'] = _to_inr_per_kg(rec.get('min_price'), base_unit)
+            rec['max_price_per_kg'] = _to_inr_per_kg(rec.get('max_price'), base_unit)
+            rec['modal_price_per_kg'] = _to_inr_per_kg(rec.get('modal_price'), base_unit)
             out.append(rec)
         return out
     except Exception as e:
@@ -3201,7 +3785,7 @@ def fetch_prices_from_upstream(commodity):
 
     return [], None
 
-def update_prices_for_commodity(commodity, force=False):
+def update_prices_for_commodity(commodity, force=False, return_summary=False):
     cache = load_cache()
     key = norm(commodity)
     now = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
@@ -3211,22 +3795,67 @@ def update_prices_for_commodity(commodity, force=False):
         return cache
 
     recs, source = fetch_prices_from_upstream(commodity)
+    sync_summary = {
+        'inserted': 0,
+        'updated': 0,
+        'unchanged': 0,
+        'history_inserted': 0,
+        'history_unchanged': 0,
+        'errors': 0,
+        'total': 0,
+    }
 
     if recs:
+        enriched_items = _enrich_market_price_items(recs)
+        new_hash = _json_sha256(enriched_items)
+        existing_hash = _json_sha256(_enrich_market_price_items((existing or {}).get('items') or [])) if existing else None
+        data_changed = (existing_hash != new_hash) or ((existing or {}).get('source') != source)
+
+        try:
+            sync_summary = _persist_mandi_price_history(
+                commodity=commodity,
+                records=enriched_items,
+                source=source,
+                scraped_at=now,
+            )
+        except Exception as e:
+            print('persist mandi sync error:', e)
+
         cache.setdefault("commodities", {})[key] = {
-            "fetched_at": now,
-            "items": recs,
+            "fetched_at": now if data_changed else (existing or {}).get('fetched_at') or now,
+            "last_scraped_at": now,
+            "items": enriched_items,
             "source": source,
+            "items_hash": new_hash,
+            "sync_summary": sync_summary,
         }
     else:
         cache.setdefault("commodities", {})[key] = {
             "fetched_at": (existing or {}).get('fetched_at'),
+            "last_scraped_at": now,
             "items": (existing or {}).get('items', []),
             "source": (existing or {}).get('source'),
+            "items_hash": (existing or {}).get('items_hash'),
+            "sync_summary": sync_summary,
         }
 
     cache["last_updated"] = now
+    cache["last_scraped_at"] = now
     save_cache(cache)
+    try:
+        print(
+            "Mandi sync summary",
+            key,
+            "inserted=", sync_summary.get('inserted', 0),
+            "updated=", sync_summary.get('updated', 0),
+            "unchanged=", sync_summary.get('unchanged', 0),
+            "history_inserted=", sync_summary.get('history_inserted', 0),
+            "errors=", sync_summary.get('errors', 0),
+        )
+    except Exception:
+        pass
+    if return_summary:
+        return {'cache': cache, 'sync_summary': sync_summary}
     return cache
 
 
@@ -4106,10 +4735,19 @@ def disease_ask():
 
 
 # -----------------------------------------------------
-#   Scheduler: daily refresh
+#   Scheduler: hourly refresh
 # -----------------------------------------------------
 scheduler = BackgroundScheduler()
-def scheduled_daily_refresh():
+def _price_refresh_interval_hours() -> int:
+    raw_value = str(os.environ.get('PRICE_REFRESH_INTERVAL_HOURS', '1') or '').strip()
+    try:
+        interval = int(raw_value)
+        return interval if interval > 0 else 1
+    except Exception:
+        return 1
+
+
+def scheduled_price_refresh():
     cache = load_cache()
     commodities = list(cache.get("commodities", {}).keys())
     if not commodities:
@@ -4121,7 +4759,14 @@ def scheduled_daily_refresh():
             print("Scheduled refresh:", c)
             update_prices_for_commodity(c, force=True)
 
-scheduler.add_job(scheduled_daily_refresh, 'interval', hours=24, next_run_time=datetime.utcnow())
+scheduler.add_job(
+    scheduled_price_refresh,
+    'interval',
+    hours=_price_refresh_interval_hours(),
+    next_run_time=datetime.utcnow(),
+    max_instances=1,
+    coalesce=True,
+)
 try:
     scheduler.start()
 except Exception as e:
@@ -4152,7 +4797,7 @@ def price():
     resolved_key = commodity_match.get('resolved_key') or norm(commodity)
 
     data = cache.get("commodities", {}).get(resolved_key, {})
-    items = data.get("items", [])
+    items = _enrich_market_price_items(data.get("items", []))
 
     if _is_commodity_cache_stale(data, ttl_hours=cache_ttl_hours):
         fetch_candidates = []
@@ -4179,7 +4824,7 @@ def price():
                 refreshed_match = _build_exact_commodity_match(candidate) if strict_match else resolve_commodity_name(candidate, cache=cache)
                 candidate_key = refreshed_match.get('resolved_key') or norm(candidate)
                 candidate_data = cache.get("commodities", {}).get(candidate_key, {})
-                items = candidate_data.get("items", [])
+                items = _enrich_market_price_items(candidate_data.get("items", []))
                 if items:
                     data = candidate_data
                     resolved_commodity = refreshed_match.get('resolved') or candidate
@@ -4196,7 +4841,7 @@ def price():
                 continue
 
     data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
-    items = data.get("items", [])
+    items = _enrich_market_price_items(data.get("items", []))
     price_meta = _price_response_metadata(data)
 
     resp = {
@@ -4204,7 +4849,12 @@ def price():
         "data": items,
         "latest_price": price_meta.get('latest_price'),
         "arrival_date": price_meta.get('arrival_date'),
+        "price_date": price_meta.get('price_date'),
+        "price_freshness": price_meta.get('price_freshness'),
+        "fresh_count": price_meta.get('fresh_count'),
+        "old_count": price_meta.get('old_count'),
         "fetched_at": price_meta.get('fetched_at'),
+        "last_scraped_at": price_meta.get('last_scraped_at'),
         "source": price_meta.get('source'),
         "commodity": {
             "requested": commodity,
