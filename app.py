@@ -3109,6 +3109,24 @@ def _should_refresh_price_entry(entry, ttl_hours=None):
     return False, 'fresh'
 
 
+def _should_refresh_for_latest_market_day(entry):
+    """Refresh when no records exist or latest trading day is older than today."""
+    entry = entry if isinstance(entry, dict) else {}
+    items = _enrich_market_price_items(entry.get('items') or [])
+    if not items:
+        return True, 'missing-data', None
+
+    latest_price_date = _latest_price_date_from_items(items)
+    if latest_price_date is None:
+        return True, 'invalid-price-date', None
+
+    today_date = _today_india_date()
+    if latest_price_date < today_date:
+        return True, 'price-date-old', latest_price_date.isoformat()
+
+    return False, 'fresh', latest_price_date.isoformat()
+
+
 def _select_latest_price_item(items):
     candidates = [row for row in (items or []) if _coerce_market_numeric((row or {}).get('modal_price')) is not None]
     if not candidates:
@@ -3890,6 +3908,11 @@ def update_prices_for_commodity(commodity, force=False, return_summary=False):
     if return_summary:
         return {'cache': cache, 'sync_summary': sync_summary}
     return cache
+
+
+def scrape_agmarknet(commodity):
+    """Synchronous on-demand refresh used by the price route."""
+    return update_prices_for_commodity(commodity, force=True)
 
 
 # -----------------------------------------------------
@@ -4819,7 +4842,6 @@ def price():
     focus_state = request.args.get('state')
     focus_district = request.args.get('district')
     focus_market = request.args.get('market')
-    cache_ttl_hours = _price_cache_ttl_hours()
 
     cache = load_cache()
     if strict_match:
@@ -4830,8 +4852,7 @@ def price():
     resolved_key = commodity_match.get('resolved_key') or norm(commodity)
 
     data = cache.get("commodities", {}).get(resolved_key, {})
-    items = _enrich_market_price_items(data.get("items", []))
-    refresh_needed, refresh_reason = _should_refresh_price_entry(data, ttl_hours=cache_ttl_hours)
+    refresh_needed, refresh_reason, pre_refresh_latest_date = _should_refresh_for_latest_market_day(data)
     refresh_triggered = False
 
     if refresh_needed:
@@ -4855,34 +4876,37 @@ def price():
         for candidate in fetch_candidates:
             try:
                 refresh_triggered = True
-                update_prices_for_commodity(candidate, force=True)
+                scrape_agmarknet(candidate)
                 cache = load_cache()
                 refreshed_match = _build_exact_commodity_match(candidate) if strict_match else resolve_commodity_name(candidate, cache=cache)
                 candidate_key = refreshed_match.get('resolved_key') or norm(candidate)
                 candidate_data = cache.get("commodities", {}).get(candidate_key, {})
-                items = _enrich_market_price_items(candidate_data.get("items", []))
-                post_refresh_needed, _ = _should_refresh_price_entry(candidate_data, ttl_hours=cache_ttl_hours)
-                if items and not post_refresh_needed:
-                    data = candidate_data
-                    resolved_commodity = refreshed_match.get('resolved') or candidate
-                    resolved_key = candidate_key
-                    commodity_match = {
-                        'requested': commodity,
-                        'requested_key': commodity_match.get('requested_key') or _commodity_lookup_key(commodity),
-                        'resolved': resolved_commodity,
-                        'resolved_key': resolved_key,
-                        'match_type': commodity_match.get('match_type') if norm(candidate) == norm(resolved_commodity) else 'resolved-fetch',
-                    }
+                data = candidate_data
+                resolved_commodity = refreshed_match.get('resolved') or candidate
+                resolved_key = candidate_key
+                commodity_match = {
+                    'requested': commodity,
+                    'requested_key': commodity_match.get('requested_key') or _commodity_lookup_key(commodity),
+                    'resolved': resolved_commodity,
+                    'resolved_key': resolved_key,
+                    'match_type': commodity_match.get('match_type') if norm(candidate) == norm(resolved_commodity) else 'resolved-fetch',
+                }
+
+                # After synchronous scrape completes, always re-check latest trading day.
+                post_refresh_needed, _, _ = _should_refresh_for_latest_market_day(candidate_data)
+                if not post_refresh_needed:
                     break
             except Exception:
                 continue
 
-                # Always re-read the final resolved key after refresh attempts so we render latest persisted state.
-                data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
-
+    # Always re-read final resolved key after refresh attempts so response uses persisted state.
     data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
     items = _enrich_market_price_items(data.get("items", []))
     price_meta = _price_response_metadata(data)
+    latest_trading_date = _latest_price_date_from_items(items)
+    market_not_updated_today = True
+    if latest_trading_date is not None:
+        market_not_updated_today = latest_trading_date < _today_india_date()
 
     resp = {
         "success": True,
@@ -4903,6 +4927,8 @@ def price():
         },
         "refresh_triggered": refresh_triggered,
         "refresh_reason": refresh_reason,
+        "market_not_updated_today": market_not_updated_today,
+        "last_trading_date": latest_trading_date.isoformat() if latest_trading_date is not None else pre_refresh_latest_date,
     }
     if ai_requested:
         resp['ai'] = gemini_live_price_summary(
