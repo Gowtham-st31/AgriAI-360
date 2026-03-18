@@ -3005,6 +3005,67 @@ def norm(c: str):
     return c.strip().lower()
 
 
+def _parse_commodity_and_variety_query(raw: str):
+    """Parse inputs like 'banana (nendra bale)' into ('banana', 'nendra bale')."""
+    text = str(raw or '').strip()
+    if not text:
+        return '', None
+
+    m = re.match(r'^\s*(.*?)\s*\(([^()]*)\)\s*$', text)
+    if not m:
+        return text, None
+
+    base = (m.group(1) or '').strip()
+    variety = (m.group(2) or '').strip()
+    if not base:
+        base = text
+    if not variety:
+        variety = None
+    return base, variety
+
+
+def _normalize_variety_text(value: str) -> str:
+    s = str(value or '').strip().lower()
+    if not s:
+        return ''
+    # remove spaces + special chars, keep alnum only
+    s = re.sub(r'[^a-z0-9]+', '', s)
+    return s
+
+
+def _filter_mandi_items_by_variety(items: list, variety_query: str) -> list:
+    q = _normalize_variety_text(variety_query)
+    if not q:
+        return list(items or [])
+
+    def matches(candidate_value: str) -> bool:
+        cand = _normalize_variety_text(candidate_value)
+        if not cand:
+            return False
+        if q in cand:
+            return True
+        if cand in q:
+            return True
+
+        # Allow close variants by requiring a strong common prefix (e.g., 'nendran'
+        # should match query 'nendra bale').
+        prefix_len = 0
+        for a, b in zip(q, cand):
+            if a != b:
+                break
+            prefix_len += 1
+        return prefix_len >= min(5, len(q), len(cand))
+
+    out = []
+    for row in (items or []):
+        if not isinstance(row, dict):
+            continue
+        candidate = row.get('variety') or row.get('variety_name') or ''
+        if matches(candidate):
+            out.append(row)
+    return out
+
+
 def _price_cache_ttl_hours() -> int:
     # Default to 6 hours (can override via PRICE_CACHE_TTL_HOURS)
     raw_value = str(os.environ.get('PRICE_CACHE_TTL_HOURS', '6') or '').strip()
@@ -5100,6 +5161,10 @@ def price():
     if not commodity:
         return jsonify({"success": False, "msg": "Commodity required"}), 400
 
+    base_commodity, variety_filter = _parse_commodity_and_variety_query(commodity)
+    if not base_commodity:
+        return jsonify({"success": False, "msg": "Commodity required"}), 400
+
     ai_requested = str(request.args.get('ai') or '').lower() in ('1', 'true', 'yes')
     strict_refresh = str(request.args.get('strict') or '').lower() in ('1', 'true', 'yes')
     strict_match = str(request.args.get('exact') or '').lower() in ('1', 'true', 'yes')
@@ -5109,11 +5174,11 @@ def price():
 
     cache = load_cache()
     if strict_match:
-        commodity_match = _build_exact_commodity_match(commodity)
+        commodity_match = _build_exact_commodity_match(base_commodity)
     else:
-        commodity_match = resolve_commodity_name(commodity, cache=cache)
-    resolved_commodity = commodity_match.get('resolved') or commodity
-    resolved_key = commodity_match.get('resolved_key') or norm(commodity)
+        commodity_match = resolve_commodity_name(base_commodity, cache=cache)
+    resolved_commodity = commodity_match.get('resolved') or base_commodity
+    resolved_key = commodity_match.get('resolved_key') or norm(base_commodity)
 
     if not resolved_key:
         return jsonify({"success": False, "msg": "Invalid commodity"}), 400
@@ -5148,7 +5213,16 @@ def price():
     cache = load_cache()
     data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
     items = _enrich_market_price_items(data.get("items", []))
-    price_meta = _price_response_metadata(data)
+    variety_not_found = False
+    if variety_filter:
+        filtered_items = _filter_mandi_items_by_variety(items, variety_filter)
+        if not filtered_items:
+            variety_not_found = True
+        items = filtered_items
+
+    tmp_entry = dict(data if isinstance(data, dict) else {})
+    tmp_entry['items'] = items
+    price_meta = _price_response_metadata(tmp_entry)
     latest_trading_date = _latest_price_date_from_items(items)
     market_not_updated_today = True
     if latest_trading_date is not None:
@@ -5183,6 +5257,7 @@ def price():
             "resolved": resolved_commodity,
             "match_type": commodity_match.get('match_type') or 'exact',
         },
+        "variety_not_found": variety_not_found,
         "refresh_triggered": refresh_triggered,
         "refresh_reason": refresh_reason,
         "new_data_available": new_data_available,
