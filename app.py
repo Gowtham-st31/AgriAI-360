@@ -3297,6 +3297,152 @@ AGMARKNET_SEARCH_URL = "https://agmarknet.gov.in/SearchCmmMkt.aspx?CommName={com
 AGMARKNET_COMMODITY_URL = "https://agmarknet.gov.in/PriceAndArrivals/CommodityWisePrices.aspx?CommName={commodity}"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; FarmerAssistant/1.0; +http://localhost/)"}
 
+# AGMARKNET 2.0 (SPA) JSON API
+AGMARKNET_V1_API_BASE = "https://api.agmarknet.gov.in/v1"
+
+_AGMARKNET_FILTERS_CACHE = {
+    'fetched_at': None,
+    'data': None,
+}
+
+_AGMARKNET_LIVE_DATE_CACHE = {
+    'fetched_at': None,
+    'raw': None,
+    'date': None,
+}
+
+_PRICE_SCRAPE_LOCK = threading.Lock()
+_PRICE_SCRAPES_IN_PROGRESS = {}
+
+
+def _agmarknet_api_timeout_seconds() -> int:
+    raw = str(os.environ.get('AGMARKNET_API_TIMEOUT_SECONDS', '15') or '').strip()
+    try:
+        val = int(raw)
+        return val if val > 0 else 15
+    except Exception:
+        return 15
+
+
+def _agmarknet_filters_ttl_seconds() -> int:
+    raw = str(os.environ.get('AGMARKNET_FILTERS_TTL_SECONDS', '21600') or '').strip()  # 6h
+    try:
+        val = int(raw)
+        return val if val > 0 else 21600
+    except Exception:
+        return 21600
+
+
+def _agmarknet_live_date_ttl_seconds() -> int:
+    raw = str(os.environ.get('AGMARKNET_LIVE_DATE_TTL_SECONDS', '300') or '').strip()  # 5m
+    try:
+        val = int(raw)
+        return val if val > 0 else 300
+    except Exception:
+        return 300
+
+
+def _parse_agmarknet_live_date(raw_value: str):
+    """Parse AGMARKNET live_date.
+
+    The API returns dates like '11-07-2025'. In practice we've observed ambiguous
+    month/day ordering across endpoints, so we parse both %d-%m-%Y and %m-%d-%Y
+    and choose the later date (safer for freshness detection).
+    """
+    text = str(raw_value or '').strip()
+    if not text:
+        return None
+
+    candidates = []
+    for fmt in ('%d-%m-%Y', '%m-%d-%Y'):
+        try:
+            candidates.append(datetime.strptime(text, fmt).date())
+        except Exception:
+            continue
+    return max(candidates) if candidates else None
+
+
+def _get_agmarknet_filters():
+    now = time.time()
+    fetched_at = _AGMARKNET_FILTERS_CACHE.get('fetched_at')
+    cached = _AGMARKNET_FILTERS_CACHE.get('data')
+    if fetched_at is not None and cached is not None and (now - fetched_at) < _agmarknet_filters_ttl_seconds():
+        return cached
+
+    url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/filters"
+    r = requests.get(url, timeout=_agmarknet_api_timeout_seconds(), headers=HEADERS)
+    jd = r.json() if r.content else {}
+    data = jd.get('data') or {}
+    _AGMARKNET_FILTERS_CACHE['fetched_at'] = now
+    _AGMARKNET_FILTERS_CACHE['data'] = data
+    return data
+
+
+def probe_latest_source_date(commodity: str = None):
+    """Lightweight probe for latest market date available upstream.
+
+    Returns a python date (or None). The `commodity` argument is accepted for UX
+    flow compatibility, but the current upstream probe is global.
+    """
+    now = time.time()
+    fetched_at = _AGMARKNET_LIVE_DATE_CACHE.get('fetched_at')
+    cached_date = _AGMARKNET_LIVE_DATE_CACHE.get('date')
+    if fetched_at is not None and cached_date is not None and (now - fetched_at) < _agmarknet_live_date_ttl_seconds():
+        return cached_date
+
+    try:
+        url = f"{AGMARKNET_V1_API_BASE}/agmarknet-live-date"
+        r = requests.get(url, timeout=_agmarknet_api_timeout_seconds(), headers=HEADERS)
+        jd = r.json() if r.content else {}
+        raw = None
+        if str(jd.get('status') or '').lower() in ('success', 'true'):
+            rows = jd.get('data') or []
+            if rows and isinstance(rows[0], dict):
+                raw = rows[0].get('live_date')
+
+        parsed = _parse_agmarknet_live_date(raw)
+        _AGMARKNET_LIVE_DATE_CACHE['fetched_at'] = now
+        _AGMARKNET_LIVE_DATE_CACHE['raw'] = raw
+        _AGMARKNET_LIVE_DATE_CACHE['date'] = parsed
+        return parsed
+    except Exception:
+        return None
+
+
+def _agmarknet_live_date_raw_string():
+    """Return the raw live_date string (e.g. '11-07-2025') for report queries."""
+    # Ensure cache is filled.
+    _ = probe_latest_source_date(None)
+    raw = str(_AGMARKNET_LIVE_DATE_CACHE.get('raw') or '').strip()
+    return raw or None
+
+
+def _try_start_background_price_scrape(commodity_name: str) -> bool:
+    """Start a background refresh for the commodity if not already running."""
+    name = str(commodity_name or '').strip()
+    if not name:
+        return False
+    key = norm(name)
+
+    with _PRICE_SCRAPE_LOCK:
+        existing = _PRICE_SCRAPES_IN_PROGRESS.get(key)
+        if existing and existing.get('thread') and existing['thread'].is_alive():
+            return False
+
+        def _runner():
+            try:
+                scrape_agmarknet(name)
+            except Exception as e:
+                print('background price scrape error for', key, ':', e)
+            finally:
+                with _PRICE_SCRAPE_LOCK:
+                    _PRICE_SCRAPES_IN_PROGRESS.pop(key, None)
+
+        t = threading.Thread(target=_runner, name=f"price-scrape:{key}", daemon=True)
+        _PRICE_SCRAPES_IN_PROGRESS[key] = {'thread': t, 'started_at': time.time()}
+        t.start()
+        return True
+
 
 def _http_retry_count() -> int:
     raw = str(os.environ.get('AGMARKNET_HTTP_RETRIES', '3') or '').strip()
@@ -3686,6 +3832,14 @@ def parse_price_table_from_soup(soup):
     return rows_out
 
 def fetch_from_agmarknet(commodity):
+    # Prefer the AGMARKNET 2.0 JSON API (SPA backend). Fall back to legacy HTML scraping.
+    try:
+        api_rows = _fetch_from_agmarknet_v1_api(commodity)
+        if api_rows:
+            return api_rows
+    except Exception as e:
+        print('agmarknet v1 api error:', e)
+
     c = commodity.strip()
     try_urls = [
         AGMARKNET_COMMODITY_URL.format(commodity=c),
@@ -3779,6 +3933,130 @@ def fetch_from_agmarknet(commodity):
             print("agmarknet fetch error for", url, ":", e)
             continue
     return []
+
+
+def _fetch_from_agmarknet_v1_api(commodity):
+    """Fetch mandi prices from the AGMARKNET v1 JSON API.
+
+    Uses:
+    - GET /daily-price-arrival/filters to resolve commodity/group IDs
+    - GET /daily-price-arrival/report for the upstream live date
+    """
+    commodity_text = str(commodity or '').strip()
+    if not commodity_text:
+        return []
+
+    filters = _get_agmarknet_filters() or {}
+    cmdt_data = filters.get('cmdt_data') or []
+
+    requested_key = _commodity_lookup_key(commodity_text)
+    cmdt_match = None
+    for row in cmdt_data:
+        name = str((row or {}).get('cmdt_name') or '').strip()
+        if not name:
+            continue
+        if _commodity_lookup_key(name) == requested_key:
+            cmdt_match = row
+            break
+
+    if not cmdt_match:
+        return []
+
+    cmdt_id = cmdt_match.get('cmdt_id')
+    group_id = cmdt_match.get('cmdt_group_id')
+    if cmdt_id is None or group_id is None:
+        return []
+
+    live_raw = _agmarknet_live_date_raw_string()
+    if not live_raw:
+        return []
+
+    max_records_raw = str(os.environ.get('AGMARKNET_API_MAX_RECORDS', '250') or '').strip()
+    try:
+        max_records = int(max_records_raw)
+    except Exception:
+        max_records = 250
+    if max_records <= 0:
+        max_records = 250
+
+    page_size = min(100, max_records)
+    rows_out = []
+    page = 1
+    total_pages = None
+
+    while len(rows_out) < max_records:
+        params = {
+            'from_date': live_raw,
+            'to_date': live_raw,
+            'group': int(group_id),
+            'commodity': int(cmdt_id),
+            'limit': int(page_size),
+            'page': int(page),
+            'format': 'json',
+        }
+
+        url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/report"
+        r = requests.get(url, params=params, timeout=_agmarknet_api_timeout_seconds(), headers=HEADERS)
+        jd = r.json() if r.content else {}
+        if not jd.get('status'):
+            break
+
+        data = jd.get('data') or {}
+        records = data.get('records') or []
+        if not records or not isinstance(records[0], dict):
+            break
+
+        chunk = records[0]
+        page_rows = chunk.get('data') or []
+        pagination = (chunk.get('pagination') or [{}])
+        page_info = pagination[0] if pagination and isinstance(pagination[0], dict) else {}
+
+        if total_pages is None:
+            try:
+                total_pages = int(page_info.get('total_pages'))
+            except Exception:
+                total_pages = None
+
+        for rec in page_rows:
+            if not isinstance(rec, dict):
+                continue
+
+            unit_raw = rec.get('unit_name_price') or 'Rs./Quintal'
+            base_unit = _normalize_unit_text(unit_raw)
+
+            min_price = _coerce_market_numeric(rec.get('min_price'))
+            max_price = _coerce_market_numeric(rec.get('max_price'))
+            modal_price = _coerce_market_numeric(rec.get('model_price'))
+
+            row = {
+                'market': rec.get('market_name') or '',
+                'district': rec.get('district_name') or '',
+                'state': rec.get('state_name') or '',
+                'variety': rec.get('variety_name') or None,
+                'grade': rec.get('grade_name') or None,
+                'min_price': min_price,
+                'max_price': max_price,
+                'modal_price': modal_price,
+                'arrival_date': rec.get('arrival_date') or live_raw,
+                'price_unit_raw': unit_raw,
+                'price_unit_base': base_unit,
+                'price_unit': 'INR/kg',
+                'commodity': commodity_text,
+            }
+            row['min_price_per_kg'] = _to_inr_per_kg(row.get('min_price'), base_unit)
+            row['max_price_per_kg'] = _to_inr_per_kg(row.get('max_price'), base_unit)
+            row['modal_price_per_kg'] = _to_inr_per_kg(row.get('modal_price'), base_unit)
+            rows_out.append(row)
+            if len(rows_out) >= max_records:
+                break
+
+        if not page_rows:
+            break
+        if total_pages is not None and page >= total_pages:
+            break
+        page += 1
+
+    return rows_out
 
 # fallback: data.gov.in dataset
 DATA_GOV_URL = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
@@ -4853,9 +5131,19 @@ def price():
 
     data = cache.get("commodities", {}).get(resolved_key, {})
     refresh_needed, refresh_reason, pre_refresh_latest_date = _should_refresh_for_latest_market_day(data)
-    refresh_triggered = False
 
-    if refresh_needed:
+    # Non-blocking freshness flow:
+    # - read DB/cache latest trading date
+    # - probe upstream latest date
+    # - if upstream is newer, start background scrape and return current DB/cache data
+    items = _enrich_market_price_items((data or {}).get('items', []))
+    db_latest_trading_date = _latest_price_date_from_items(items)
+
+    source_latest_date = probe_latest_source_date(resolved_commodity)
+    new_data_available = bool(source_latest_date and (db_latest_trading_date is None or source_latest_date > db_latest_trading_date))
+
+    scrape_started = False
+    if new_data_available:
         fetch_candidates = []
         if commodity_match.get('match_type') in ('prefix', 'fuzzy'):
             candidate_pool = (resolved_commodity,)
@@ -4874,32 +5162,14 @@ def price():
             fetch_candidates.append(candidate_name)
 
         for candidate in fetch_candidates:
-            try:
-                refresh_triggered = True
-                scrape_agmarknet(candidate)
-                cache = load_cache()
-                refreshed_match = _build_exact_commodity_match(candidate) if strict_match else resolve_commodity_name(candidate, cache=cache)
-                candidate_key = refreshed_match.get('resolved_key') or norm(candidate)
-                candidate_data = cache.get("commodities", {}).get(candidate_key, {})
-                data = candidate_data
-                resolved_commodity = refreshed_match.get('resolved') or candidate
-                resolved_key = candidate_key
-                commodity_match = {
-                    'requested': commodity,
-                    'requested_key': commodity_match.get('requested_key') or _commodity_lookup_key(commodity),
-                    'resolved': resolved_commodity,
-                    'resolved_key': resolved_key,
-                    'match_type': commodity_match.get('match_type') if norm(candidate) == norm(resolved_commodity) else 'resolved-fetch',
-                }
+            if _try_start_background_price_scrape(candidate):
+                scrape_started = True
+                break
 
-                # After synchronous scrape completes, always re-check latest trading day.
-                post_refresh_needed, _, _ = _should_refresh_for_latest_market_day(candidate_data)
-                if not post_refresh_needed:
-                    break
-            except Exception:
-                continue
+    refresh_triggered = scrape_started
 
-    # Always re-read final resolved key after refresh attempts so response uses persisted state.
+    # Re-read final resolved key (no blocking refresh here), so response uses persisted state.
+    cache = load_cache()
     data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
     items = _enrich_market_price_items(data.get("items", []))
     price_meta = _price_response_metadata(data)
@@ -4927,6 +5197,8 @@ def price():
         },
         "refresh_triggered": refresh_triggered,
         "refresh_reason": refresh_reason,
+        "new_data_available": new_data_available,
+        "scrape_started": scrape_started,
         "market_not_updated_today": market_not_updated_today,
         "last_trading_date": latest_trading_date.isoformat() if latest_trading_date is not None else pre_refresh_latest_date,
     }

@@ -89,6 +89,15 @@ document.getElementById("checkPrice").onclick = async () => {
   // Cards
   let html = "";
 
+  // Non-blocking freshness banner (backend will scrape in background)
+  if (data && data.new_data_available === true && data.scrape_started === true) {
+    html += `
+      <div class="card p-3 mt-3">
+        <b>New mandi price available.</b> Fetching latest…
+      </div>
+    `;
+  }
+
   // Optional AI summary
   try {
     if (data.ai) {
