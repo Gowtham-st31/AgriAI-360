@@ -24,7 +24,7 @@ import socket                # 🔥 moved here
 import inspect
 import hashlib
 from bs4 import BeautifulSoup, FeatureNotFound
-from apscheduler.schedulers.background import BackgroundScheduler
+
 try:
     from google.auth.transport import requests as google_auth_requests
     from google.oauth2 import id_token as google_id_token
@@ -3006,7 +3006,8 @@ def norm(c: str):
 
 
 def _price_cache_ttl_hours() -> int:
-    raw_value = str(os.environ.get('PRICE_CACHE_TTL_HOURS', '1') or '').strip()
+    # Default to 6 hours (can override via PRICE_CACHE_TTL_HOURS)
+    raw_value = str(os.environ.get('PRICE_CACHE_TTL_HOURS', '6') or '').strip()
     try:
         ttl_hours = int(raw_value)
         return ttl_hours if ttl_hours > 0 else 1
@@ -3295,7 +3296,11 @@ def resolve_commodity_name(raw_name: str, cache=None) -> dict:
 # AGMARKNET / datagov urls & headers
 AGMARKNET_SEARCH_URL = "https://agmarknet.gov.in/SearchCmmMkt.aspx?CommName={commodity}"
 AGMARKNET_COMMODITY_URL = "https://agmarknet.gov.in/PriceAndArrivals/CommodityWisePrices.aspx?CommName={commodity}"
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; FarmerAssistant/1.0; +http://localhost/)"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (compatible; FarmerAssistant/1.0; +http://localhost/)",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://agmarknet.gov.in/",
+}
 
 # AGMARKNET 2.0 (SPA) JSON API
 AGMARKNET_V1_API_BASE = "https://api.agmarknet.gov.in/v1"
@@ -3310,10 +3315,6 @@ _AGMARKNET_LIVE_DATE_CACHE = {
     'raw': None,
     'date': None,
 }
-
-_PRICE_SCRAPE_LOCK = threading.Lock()
-_PRICE_SCRAPES_IN_PROGRESS = {}
-
 
 def _agmarknet_api_timeout_seconds() -> int:
     raw = str(os.environ.get('AGMARKNET_API_TIMEOUT_SECONDS', '15') or '').strip()
@@ -3370,7 +3371,8 @@ def _get_agmarknet_filters():
         return cached
 
     url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/filters"
-    r = requests.get(url, timeout=_agmarknet_api_timeout_seconds(), headers=HEADERS)
+    session_obj = requests.Session()
+    r = _request_with_retry(session_obj, 'GET', url, headers=HEADERS)
     jd = r.json() if r.content else {}
     data = jd.get('data') or {}
     _AGMARKNET_FILTERS_CACHE['fetched_at'] = now
@@ -3392,7 +3394,8 @@ def probe_latest_source_date(commodity: str = None):
 
     try:
         url = f"{AGMARKNET_V1_API_BASE}/agmarknet-live-date"
-        r = requests.get(url, timeout=_agmarknet_api_timeout_seconds(), headers=HEADERS)
+        session_obj = requests.Session()
+        r = _request_with_retry(session_obj, 'GET', url, headers=HEADERS)
         jd = r.json() if r.content else {}
         raw = None
         if str(jd.get('status') or '').lower() in ('success', 'true'):
@@ -3415,33 +3418,6 @@ def _agmarknet_live_date_raw_string():
     _ = probe_latest_source_date(None)
     raw = str(_AGMARKNET_LIVE_DATE_CACHE.get('raw') or '').strip()
     return raw or None
-
-
-def _try_start_background_price_scrape(commodity_name: str) -> bool:
-    """Start a background refresh for the commodity if not already running."""
-    name = str(commodity_name or '').strip()
-    if not name:
-        return False
-    key = norm(name)
-
-    with _PRICE_SCRAPE_LOCK:
-        existing = _PRICE_SCRAPES_IN_PROGRESS.get(key)
-        if existing and existing.get('thread') and existing['thread'].is_alive():
-            return False
-
-        def _runner():
-            try:
-                scrape_agmarknet(name)
-            except Exception as e:
-                print('background price scrape error for', key, ':', e)
-            finally:
-                with _PRICE_SCRAPE_LOCK:
-                    _PRICE_SCRAPES_IN_PROGRESS.pop(key, None)
-
-        t = threading.Thread(target=_runner, name=f"price-scrape:{key}", daemon=True)
-        _PRICE_SCRAPES_IN_PROGRESS[key] = {'thread': t, 'started_at': time.time()}
-        t.start()
-        return True
 
 
 def _http_retry_count() -> int:
@@ -3996,7 +3972,8 @@ def _fetch_from_agmarknet_v1_api(commodity):
         }
 
         url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/report"
-        r = requests.get(url, params=params, timeout=_agmarknet_api_timeout_seconds(), headers=HEADERS)
+        session_obj = requests.Session()
+        r = _request_with_retry(session_obj, 'GET', url, params=params, headers=HEADERS)
         jd = r.json() if r.content else {}
         if not jd.get('status'):
             break
@@ -4070,7 +4047,8 @@ def fetch_from_datagov(commodity, limit=40):
         "filters[commodity]": commodity
     }
     try:
-        r = requests.get(DATA_GOV_URL, params=params, timeout=10)
+        session_obj = requests.Session()
+        r = _request_with_retry(session_obj, 'GET', DATA_GOV_URL, params=params, headers=HEADERS)
         if r.status_code != 200:
             return []
         j = r.json()
@@ -4117,6 +4095,10 @@ def fetch_prices_from_upstream(commodity):
 def update_prices_for_commodity(commodity, force=False, return_summary=False):
     cache = load_cache()
     key = norm(commodity)
+    if not key:
+        if return_summary:
+            return {'cache': cache, 'sync_summary': {'errors': 1, 'total': 0}}
+        return cache
     now = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
     existing = cache.get("commodities", {}).get(key)
     if existing and not force and not _is_commodity_cache_stale(existing):
@@ -4159,14 +4141,20 @@ def update_prices_for_commodity(commodity, force=False, return_summary=False):
             "sync_summary": sync_summary,
         }
     else:
-        cache.setdefault("commodities", {})[key] = {
-            "fetched_at": (existing or {}).get('fetched_at'),
-            "last_scraped_at": now,
-            "items": (existing or {}).get('items', []),
-            "source": (existing or {}).get('source'),
-            "items_hash": (existing or {}).get('items_hash'),
-            "sync_summary": sync_summary,
-        }
+        # Do not create a new empty entry for unknown/invalid commodities.
+        if existing:
+            cache.setdefault("commodities", {})[key] = {
+                "fetched_at": (existing or {}).get('fetched_at'),
+                "last_scraped_at": now,
+                "items": (existing or {}).get('items', []),
+                "source": (existing or {}).get('source'),
+                "items_hash": (existing or {}).get('items_hash'),
+                "sync_summary": sync_summary,
+            }
+        else:
+            if return_summary:
+                return {'cache': cache, 'sync_summary': sync_summary}
+            return cache
 
     cache["last_updated"] = now
     cache["last_scraped_at"] = now
@@ -5069,45 +5057,7 @@ def disease_ask():
 
 
 # -----------------------------------------------------
-#   Scheduler: hourly refresh
-# -----------------------------------------------------
-scheduler = BackgroundScheduler()
-def _price_refresh_interval_hours() -> int:
-    raw_value = str(os.environ.get('PRICE_REFRESH_INTERVAL_HOURS', '1') or '').strip()
-    try:
-        interval = int(raw_value)
-        return interval if interval > 0 else 1
-    except Exception:
-        return 1
-
-
-def scheduled_price_refresh():
-    cache = load_cache()
-    commodities = list(cache.get("commodities", {}).keys())
-    if not commodities:
-        for c in ["tomato", "banana", "onion", "potato"]:
-            print("Initial scheduled fetch:", c)
-            update_prices_for_commodity(c, force=True)
-    else:
-        for c in commodities:
-            print("Scheduled refresh:", c)
-            update_prices_for_commodity(c, force=True)
-
-scheduler.add_job(
-    scheduled_price_refresh,
-    'interval',
-    hours=_price_refresh_interval_hours(),
-    next_run_time=datetime.utcnow(),
-    max_instances=1,
-    coalesce=True,
-)
-try:
-    scheduler.start()
-except Exception as e:
-    print("Scheduler start error:", e)
-
-# -----------------------------------------------------
-#   PRICE ENDPOINTS (use cache, add admin refresh)
+#   PRICE ENDPOINTS (cache; refresh only on request)
 # -----------------------------------------------------
 @app.route("/price")
 def price():
@@ -5116,7 +5066,8 @@ def price():
         return jsonify({"success": False, "msg": "Commodity required"}), 400
 
     ai_requested = str(request.args.get('ai') or '').lower() in ('1', 'true', 'yes')
-    strict_match = str(request.args.get('strict') or request.args.get('exact') or '').lower() in ('1', 'true', 'yes')
+    strict_refresh = str(request.args.get('strict') or '').lower() in ('1', 'true', 'yes')
+    strict_match = strict_refresh or (str(request.args.get('exact') or '').lower() in ('1', 'true', 'yes'))
     focus_state = request.args.get('state')
     focus_district = request.args.get('district')
     focus_market = request.args.get('market')
@@ -5129,46 +5080,24 @@ def price():
     resolved_commodity = commodity_match.get('resolved') or commodity
     resolved_key = commodity_match.get('resolved_key') or norm(commodity)
 
+    if not resolved_key:
+        return jsonify({"success": False, "msg": "Invalid commodity"}), 400
+
     data = cache.get("commodities", {}).get(resolved_key, {})
-    refresh_needed, refresh_reason, pre_refresh_latest_date = _should_refresh_for_latest_market_day(data)
+    refresh_triggered = False
+    refresh_reason = 'fresh'
+    pre_refresh_latest_date = None
 
-    # Non-blocking freshness flow:
-    # - read DB/cache latest trading date
-    # - probe upstream latest date
-    # - if upstream is newer, start background scrape and return current DB/cache data
-    items = _enrich_market_price_items((data or {}).get('items', []))
-    db_latest_trading_date = _latest_price_date_from_items(items)
+    ttl_hours = _price_cache_ttl_hours()
+    if strict_refresh or _is_commodity_cache_stale(data, ttl_hours=ttl_hours):
+        refresh_reason = 'strict' if strict_refresh else 'cache-ttl-expired'
+        try:
+            update_prices_for_commodity(resolved_commodity, force=True)
+            refresh_triggered = True
+        except Exception as e:
+            print('price refresh error:', e)
 
-    source_latest_date = probe_latest_source_date(resolved_commodity)
-    new_data_available = bool(source_latest_date and (db_latest_trading_date is None or source_latest_date > db_latest_trading_date))
-
-    scrape_started = False
-    if new_data_available:
-        fetch_candidates = []
-        if commodity_match.get('match_type') in ('prefix', 'fuzzy'):
-            candidate_pool = (resolved_commodity,)
-        else:
-            candidate_pool = (resolved_commodity, commodity)
-
-        seen_fetch_keys = set()
-        for candidate in candidate_pool:
-            candidate_name = str(candidate or '').strip()
-            if not candidate_name:
-                continue
-            candidate_key = norm(candidate_name)
-            if candidate_key in seen_fetch_keys:
-                continue
-            seen_fetch_keys.add(candidate_key)
-            fetch_candidates.append(candidate_name)
-
-        for candidate in fetch_candidates:
-            if _try_start_background_price_scrape(candidate):
-                scrape_started = True
-                break
-
-    refresh_triggered = scrape_started
-
-    # Re-read final resolved key (no blocking refresh here), so response uses persisted state.
+    # Re-read final resolved key after the (optional) synchronous refresh.
     cache = load_cache()
     data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
     items = _enrich_market_price_items(data.get("items", []))
@@ -5178,9 +5107,21 @@ def price():
     if latest_trading_date is not None:
         market_not_updated_today = latest_trading_date < _today_india_date()
 
+    latest_item = _select_latest_price_item(items) or {}
+    top_price = price_meta.get('latest_price')
+    top_market = latest_item.get('market') if isinstance(latest_item, dict) else None
+    top_state = latest_item.get('state') if isinstance(latest_item, dict) else None
+    last_updated = price_meta.get('fetched_at') or cache.get('last_updated')
+
     resp = {
         "success": True,
         "data": items,
+        # Required top-level fields (kept alongside existing response shape)
+        "commodity": _display_commodity_name(resolved_commodity),
+        "price": top_price,
+        "market": top_market,
+        "state": top_state,
+        "last_updated": last_updated,
         "latest_price": price_meta.get('latest_price'),
         "arrival_date": price_meta.get('arrival_date'),
         "price_date": price_meta.get('price_date'),
@@ -5190,15 +5131,15 @@ def price():
         "fetched_at": price_meta.get('fetched_at'),
         "last_scraped_at": price_meta.get('last_scraped_at'),
         "source": price_meta.get('source'),
-        "commodity": {
+        "commodity_meta": {
             "requested": commodity,
             "resolved": resolved_commodity,
             "match_type": commodity_match.get('match_type') or 'exact',
         },
         "refresh_triggered": refresh_triggered,
         "refresh_reason": refresh_reason,
-        "new_data_available": new_data_available,
-        "scrape_started": scrape_started,
+        "new_data_available": False,
+        "scrape_started": False,
         "market_not_updated_today": market_not_updated_today,
         "last_trading_date": latest_trading_date.isoformat() if latest_trading_date is not None else pre_refresh_latest_date,
     }
@@ -5224,11 +5165,10 @@ ADMIN_EMAILS = [e.strip().lower() for e in os.environ.get('ADMIN_EMAILS', 'admin
 def admin_refresh_price():
     if not session.get("admin"):
         return jsonify({"success": False, "msg": "Not authorized"}), 403
-    commodity = request.args.get("commodity")
-    if not commodity:
-        return jsonify({"success": False, "msg": "commodity param required"}), 400
-    update_prices_for_commodity(commodity, force=True)
-    return jsonify({"success": True, "msg": f"Refreshed {commodity}"})
+    return jsonify({
+        "success": False,
+        "msg": "Disabled: refresh is only allowed via GET /price (use /price?commodity=...&strict=1)."
+    }), 410
 
 # -----------------------------------------------------
 #   ADMIN PAGES / LOGIN
@@ -6343,22 +6283,6 @@ def _guard_static_home_access():
 #   RUN SERVER
 # -----------------------------------------------------
 if __name__ == "__main__":
-    # Optional: Prime cache with common commodities.
-    # Disabled by default to keep startup fast on hosted platforms.
-    if str(os.environ.get('SEED_PRICES_ON_START', '0')).lower() in ('1', 'true', 'yes'):
-        def _seed_prices_bg():
-            try:
-                for c in ["tomato", "banana", "onion", "potato"]:
-                    try:
-                        update_prices_for_commodity(c)
-                        time.sleep(1)
-                    except Exception as e:
-                        print("Initial fetch error for", c, ":", e)
-            except Exception as e:
-                print("Initial seeding error:", e)
-
-        threading.Thread(target=_seed_prices_bg, daemon=True).start()
-
     # Render/hosted platforms provide PORT; default to 5000 for local.
     try:
         port = int(os.environ.get('PORT', '5000'))
