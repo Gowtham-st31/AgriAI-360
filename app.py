@@ -3316,6 +3316,9 @@ _AGMARKNET_LIVE_DATE_CACHE = {
     'date': None,
 }
 
+_PRICE_SCRAPE_LOCK = threading.Lock()
+_PRICE_SCRAPES_IN_PROGRESS = {}
+
 def _agmarknet_api_timeout_seconds() -> int:
     raw = str(os.environ.get('AGMARKNET_API_TIMEOUT_SECONDS', '15') or '').strip()
     try:
@@ -3418,6 +3421,38 @@ def _agmarknet_live_date_raw_string():
     _ = probe_latest_source_date(None)
     raw = str(_AGMARKNET_LIVE_DATE_CACHE.get('raw') or '').strip()
     return raw or None
+
+
+def _try_start_background_price_scrape(commodity_name: str) -> bool:
+    """Start a background refresh for the commodity if not already running.
+
+    This keeps /price non-blocking while allowing the cache to catch up.
+    """
+    name = str(commodity_name or '').strip()
+    if not name:
+        return False
+    key = norm(name)
+    if not key:
+        return False
+
+    with _PRICE_SCRAPE_LOCK:
+        existing = _PRICE_SCRAPES_IN_PROGRESS.get(key)
+        if existing and existing.get('thread') and existing['thread'].is_alive():
+            return False
+
+        def _runner():
+            try:
+                update_prices_for_commodity(name, force=True)
+            except Exception as e:
+                print('background price scrape error for', key, ':', e)
+            finally:
+                with _PRICE_SCRAPE_LOCK:
+                    _PRICE_SCRAPES_IN_PROGRESS.pop(key, None)
+
+        t = threading.Thread(target=_runner, name=f"price-scrape:{key}", daemon=True)
+        _PRICE_SCRAPES_IN_PROGRESS[key] = {'thread': t, 'started_at': time.time()}
+        t.start()
+        return True
 
 
 def _http_retry_count() -> int:
@@ -5067,7 +5102,7 @@ def price():
 
     ai_requested = str(request.args.get('ai') or '').lower() in ('1', 'true', 'yes')
     strict_refresh = str(request.args.get('strict') or '').lower() in ('1', 'true', 'yes')
-    strict_match = strict_refresh or (str(request.args.get('exact') or '').lower() in ('1', 'true', 'yes'))
+    strict_match = str(request.args.get('exact') or '').lower() in ('1', 'true', 'yes')
     focus_state = request.args.get('state')
     focus_district = request.args.get('district')
     focus_market = request.args.get('market')
@@ -5088,16 +5123,28 @@ def price():
     refresh_reason = 'fresh'
     pre_refresh_latest_date = None
 
-    ttl_hours = _price_cache_ttl_hours()
-    if strict_refresh or _is_commodity_cache_stale(data, ttl_hours=ttl_hours):
-        refresh_reason = 'strict' if strict_refresh else 'cache-ttl-expired'
-        try:
-            update_prices_for_commodity(resolved_commodity, force=True)
-            refresh_triggered = True
-        except Exception as e:
-            print('price refresh error:', e)
+    # Non-blocking freshness flow:
+    # - read DB/cache latest trading date
+    # - probe upstream latest date
+    # - if upstream is newer, start background scrape and return current DB/cache data
+    items_pre = _enrich_market_price_items((data or {}).get('items', []))
+    db_latest_trading_date = _latest_price_date_from_items(items_pre)
 
-    # Re-read final resolved key after the (optional) synchronous refresh.
+    source_latest_date = probe_latest_source_date(resolved_commodity)
+    new_data_available = bool(source_latest_date and (db_latest_trading_date is None or source_latest_date > db_latest_trading_date))
+    if strict_refresh:
+        new_data_available = True
+
+    scrape_started = False
+    if new_data_available:
+        scrape_started = _try_start_background_price_scrape(resolved_commodity)
+        refresh_triggered = scrape_started
+        if strict_refresh:
+            refresh_reason = 'strict' if scrape_started else 'scrape-already-running'
+        else:
+            refresh_reason = 'source-newer' if scrape_started else 'scrape-already-running'
+
+    # Re-read final resolved key (still non-blocking), so response uses persisted state.
     cache = load_cache()
     data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
     items = _enrich_market_price_items(data.get("items", []))
@@ -5138,8 +5185,8 @@ def price():
         },
         "refresh_triggered": refresh_triggered,
         "refresh_reason": refresh_reason,
-        "new_data_available": False,
-        "scrape_started": False,
+        "new_data_available": new_data_available,
+        "scrape_started": scrape_started,
         "market_not_updated_today": market_not_updated_today,
         "last_trading_date": latest_trading_date.isoformat() if latest_trading_date is not None else pre_refresh_latest_date,
     }
