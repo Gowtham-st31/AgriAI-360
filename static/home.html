@@ -463,7 +463,7 @@ function renderItems(targetEl, items){
             infoWrap.appendChild(title); infoWrap.appendChild(meta); infoWrap.appendChild(price);
 
             const actions = document.createElement('div'); actions.className = 'product-actions';
-            const buyBtn = document.createElement('button'); buyBtn.className='btn-main'; buyBtn.innerHTML='<i class="fa-solid fa-plus"></i> Cart'; buyBtn.addEventListener('click', ()=>{ try{ window.addToCart(it, true) }catch(e){ window.location.href='/buy.html' } });
+            const buyBtn = document.createElement('button'); buyBtn.className='btn-main'; buyBtn.innerHTML='<i class="fa-solid fa-plus"></i> Cart'; buyBtn.addEventListener('click', ()=>{ try{ window.addToCart(it) }catch(e){ window.location.href='/buy.html' } });
             const contactBtn = document.createElement('button'); contactBtn.className='btn'; contactBtn.innerHTML='<i class="fa-regular fa-message"></i> Contact'; contactBtn.addEventListener('click', ()=>{ try{ window.contactSeller(it.seller, it) }catch(e){ window.location.href='/sell.html' } });
             
             actions.appendChild(buyBtn); actions.appendChild(contactBtn);

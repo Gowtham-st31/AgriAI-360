@@ -32,6 +32,15 @@
       '.agri-table td{padding:10px 14px;color:#cbd5e1;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px;vertical-align:middle}.agri-table tr:hover td{background:rgba(255,255,255,.025)}',
       '.agri-badge-green{display:inline-block;padding:2px 10px;border-radius:999px;background:rgba(16,185,129,.15);color:#34d399;font-size:11px;font-weight:600}',
       '.agri-badge-gray{display:inline-block;padding:2px 10px;border-radius:999px;background:rgba(255,255,255,.07);color:#94a3b8;font-size:11px;font-weight:600}',
+      '@keyframes agriBump{0%{transform:scale(1)}30%{transform:scale(1.22)}60%{transform:scale(.96)}100%{transform:scale(1)}}.agri-bump{animation:agriBump .35s ease-out}',
+      '@keyframes agriToastIn{0%{opacity:0;transform:translateY(10px) scale(.98)}100%{opacity:1;transform:translateY(0) scale(1)}}',
+      '@keyframes agriToastOut{0%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0;transform:translateY(6px) scale(.98)}}',
+      '.agri-toast-host{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none}',
+      '.agri-toast{pointer-events:none;min-width:220px;max-width:min(92vw,420px);padding:10px 12px;border-radius:12px;background:rgba(15,23,42,.92);border:1px solid rgba(255,255,255,.12);box-shadow:0 12px 32px rgba(0,0,0,.35);color:#e2e8f0;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;animation:agriToastIn .18s ease-out both}',
+      '.agri-toast.out{animation:agriToastOut .18s ease-in both}',
+      '.agri-toast i{font-size:14px}',
+      '.agri-toast-success i{color:#34d399}',
+      '.agri-toast-error i{color:#f87171}',
       '.agri-small-input{width:90px;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;font-size:12px;outline:none;font-family:\'Poppins\',sans-serif}',
       '.agri-small-input:focus{border-color:#34d399}'
     ].join('');

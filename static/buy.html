@@ -96,7 +96,7 @@
       const price=document.createElement('div'); price.style.cssText='color:#34d399;font-weight:700;font-size:20px'; price.textContent='\u20B9'+(it.price||'0');
       const meta=document.createElement('div'); meta.style.cssText='color:#64748b;font-size:12px'; meta.innerHTML='<i class="fa-solid fa-weight-hanging fa-xs"></i> '+(it.quantity||'')+' kg \u2022 <i class="fa-solid fa-user fa-xs"></i> '+(it.seller||'anon');
       const btn=document.createElement('button'); btn.className='p-buy-btn'; btn.innerHTML='<i class="fa-solid fa-cart-plus"></i>Add to Cart';
-      btn.addEventListener('click',()=>{try{window.addToCart(it,true)}catch(e){try{window.addToCart(it)}catch(e){}}});
+      btn.addEventListener('click',()=>{try{window.addToCart(it)}catch(e){}});
       body.appendChild(name); body.appendChild(price); body.appendChild(meta); body.appendChild(btn);
       div.appendChild(img); div.appendChild(body);
       el.appendChild(div);

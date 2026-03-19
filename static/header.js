@@ -358,7 +358,60 @@
   // Cart helpers (store in localStorage)
   window.getCart = function(){ try{ return JSON.parse(localStorage.getItem('agri_cart')||'[]') }catch(e){ return [] } }
   window.setCart = function(c){ try{ localStorage.setItem('agri_cart', JSON.stringify(c)) }catch(e){} }
-  window.updateCartCount = function(){ const el = document.getElementById('cart-count'); if(!el) return; const n = window.getCart().reduce((s,it)=>s+(it.qty||1),0); el.textContent = n; }
+  function getCartItemCount(){
+    try{ return window.getCart().reduce((s,it)=>s+(it.qty||1),0); }catch(e){ return 0; }
+  }
+  window.updateCartCount = function(){
+    const n = getCartItemCount();
+    try{ const el = document.getElementById('cart-count'); if(el) el.textContent = n; }catch(e){}
+    try{ const fc = document.getElementById('floating-cart-count'); if(fc) fc.textContent = n; }catch(e){}
+  }
+  function bumpCartIndicators(){
+    try{
+      ['cart-count','floating-cart-count'].forEach((id)=>{
+        const el = document.getElementById(id);
+        if(!el) return;
+        el.classList.remove('agri-bump');
+        // force reflow to restart animation
+        void el.offsetWidth;
+        el.classList.add('agri-bump');
+      });
+    }catch(e){}
+  }
+  function ensureToastHost(){
+    let host = document.getElementById('agri-toast-host');
+    if(host) return host;
+    host = document.createElement('div');
+    host.id = 'agri-toast-host';
+    host.className = 'agri-toast-host';
+    document.body.appendChild(host);
+    return host;
+  }
+  window.showToast = function(message, kind){
+    try{
+      const text = (message||'').toString().trim();
+      if(!text) return;
+      const host = ensureToastHost();
+      const toast = document.createElement('div');
+      const k = (kind||'success').toString();
+      toast.className = 'agri-toast ' + (k==='error' ? 'agri-toast-error' : 'agri-toast-success');
+      const icon = document.createElement('i');
+      icon.className = 'fa-solid ' + (k==='error' ? 'fa-circle-xmark' : 'fa-circle-check');
+      const span = document.createElement('span');
+      span.textContent = text;
+      toast.appendChild(icon);
+      toast.appendChild(span);
+      host.appendChild(toast);
+
+      const ttl = (k==='error' ? 2400 : 1600);
+      window.setTimeout(()=>{
+        try{ toast.classList.add('out'); }catch(e){}
+      }, Math.max(400, ttl - 260));
+      window.setTimeout(()=>{
+        try{ toast.remove(); }catch(e){}
+      }, ttl);
+    }catch(e){ /* ignore toast errors */ }
+  }
   function normalizeAvailableQuantity(item){
       const raw = item && (item.available_quantity ?? item.quantity ?? item.stock ?? null);
       const parsed = Number(raw);
@@ -371,7 +424,8 @@
       return '/icons/' + text.replace(/^\/+/, '');
     }
   window.addToCart = function(item, goToCart){ try{
-      if(!item) { alert('Item not available'); return }
+      // NOTE: We intentionally do not auto-navigate to the cart.
+      if(!item) { try{ window.showToast('Item not available', 'error') }catch(e){}; return }
       const cart = window.getCart();
       const itemIcon = normalizeIconPath(item.icon);
       const availableQuantity = normalizeAvailableQuantity(item);
@@ -381,7 +435,7 @@
       if(existing){
         const nextQty = (existing.qty||1) + 1;
         const limit = availableQuantity || existing.available_quantity || null;
-        if(limit !== null && nextQty > limit){ alert('Only '+limit+' kg available for '+(item.product||'this product')+'.'); return }
+        if(limit !== null && nextQty > limit){ try{ window.showToast('Only '+limit+' kg available for '+(item.product||'this product')+'.', 'error') }catch(e){}; return }
         existing.qty = nextQty;
         if(itemIcon) existing.icon = itemIcon;
         if(limit !== null) existing.available_quantity = limit;
@@ -391,13 +445,14 @@
       }
       window.setCart(cart);
       window.updateCartCount();
-      // update floating cart count if present
-      try{ const fc = document.getElementById('floating-cart-count'); if(fc) fc.textContent = window.getCart().reduce((s,it)=>s+(it.qty||1),0); }catch(e){}
-      try{ if(goToCart) { window.location.href = '/cart'; return } }catch(e){}
-      // small feedback
+      bumpCartIndicators();
+      // small non-blocking feedback
       const msg = (item.product?('Added "'+item.product+'" to cart'):'Added to cart');
-      try{ alert(msg) }catch(e){}
-    }catch(e){ console.error('addToCart', e); alert('Could not add to cart') } }
+      try{ window.showToast(msg, 'success'); }catch(e){}
+      // Backwards compatibility: some pages used to pass goToCart=true.
+      // We intentionally ignore navigation requests.
+      try{ void goToCart; }catch(e){}
+    }catch(e){ console.error('addToCart', e); try{ window.showToast('Could not add to cart', 'error') }catch(_e){ alert('Could not add to cart') } } }
 
   window.contactSeller = function(seller, item){ try{
       if(!seller){ alert('Seller contact not available'); return }
