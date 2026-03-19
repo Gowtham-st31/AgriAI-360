@@ -5119,43 +5119,140 @@ def _fetch_from_agmarknet_v1_api(commodity):
 DATA_GOV_URL = "https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070"
 DATA_GOV_KEY = "579b464db66ec23bdd0000019f3a4436fd4c478c533152e915ffe027"
 
-def fetch_from_datagov(commodity, limit=40):
-    params = {
+def fetch_from_datagov(
+    commodity,
+    limit=40,
+    *,
+    state: str = None,
+    district: str = None,
+    from_date: str = None,
+    to_date: str = None,
+):
+    """Fetch mandi prices from data.gov.in dataset.
+
+    This is a best-effort fallback used when AGMARKNET endpoints are blocked.
+    Supports optional state/district/date filters and pagination.
+    """
+
+    def _max_records() -> int:
+        raw = str(os.environ.get('DATA_GOV_MAX_RECORDS', '') or '').strip()
+        try:
+            val = int(raw) if raw else 400
+            return val if val > 0 else 400
+        except Exception:
+            return 400
+
+    def _coerce_int(v, default):
+        try:
+            vv = int(v)
+            return vv if vv > 0 else default
+        except Exception:
+            return default
+
+    max_records = _max_records()
+    page_size = min(200, max_records)
+    # If caller passes an explicit smaller limit, respect it.
+    page_size = min(page_size, _coerce_int(limit, page_size))
+
+    base_params = {
         "api-key": DATA_GOV_KEY,
         "format": "json",
-        "limit": limit,
-        "filters[commodity]": commodity
+        "limit": int(page_size),
+        "filters[commodity]": commodity,
     }
+    if state:
+        base_params["filters[state]"] = str(state).strip()
+    if district:
+        base_params["filters[district]"] = str(district).strip()
+
+    # data.gov.in date fields are inconsistent across exports; we try both
+    # arrival_date and date with multiple formats.
+    date_filters = []
     try:
-        session_obj = requests.Session()
-        r = _request_with_retry(session_obj, 'GET', DATA_GOV_URL, params=params, headers=HEADERS)
-        if r.status_code != 200:
-            return []
-        j = r.json()
-        recs = j.get("records", [])
+        from_d = _parse_ymd_date(from_date) if from_date else None
+        to_d = _parse_ymd_date(to_date) if to_date else None
+        if from_d and to_d and from_d == to_d:
+            d = from_d
+        elif to_d:
+            d = to_d
+        elif from_d:
+            d = from_d
+        else:
+            d = None
+        if d is not None:
+            date_filters = [
+                d.strftime('%d/%m/%Y'),
+                d.strftime('%d-%m-%Y'),
+                d.strftime('%Y-%m-%d'),
+            ]
+    except Exception:
+        date_filters = []
+
+    def _fetch_pages(params: dict) -> list:
         out = []
-        for d in recs:
-            unit_raw = d.get('price_unit') or d.get('unit') or 'Rs./Quintal'
-            base_unit = _normalize_unit_text(unit_raw)
-            rec = {
-                "market": d.get("market", ""),
-                "district": d.get("district", ""),
-                "state": d.get("state", ""),
-                "variety": d.get("variety", None),
-                "grade": d.get("grade", None),
-                "min_price": int(d.get("min_price")) if d.get("min_price") and str(d.get("min_price")).isdigit() else None,
-                "max_price": int(d.get("max_price")) if d.get("max_price") and str(d.get("max_price")).isdigit() else None,
-                "modal_price": int(d.get("modal_price")) if d.get("modal_price") and str(d.get("modal_price")).isdigit() else None,
-                "arrival_date": d.get("arrival_date") or d.get("date"),
-                "price_unit_raw": unit_raw,
-                "price_unit_base": base_unit,
-                "price_unit": 'INR/kg',
-            }
-            rec['min_price_per_kg'] = _to_inr_per_kg(rec.get('min_price'), base_unit)
-            rec['max_price_per_kg'] = _to_inr_per_kg(rec.get('max_price'), base_unit)
-            rec['modal_price_per_kg'] = _to_inr_per_kg(rec.get('modal_price'), base_unit)
-            out.append(rec)
+        session_obj = requests.Session()
+        offset = 0
+        while len(out) < max_records:
+            page_params = dict(params)
+            page_params['offset'] = int(offset)
+            r = _request_with_retry(session_obj, 'GET', DATA_GOV_URL, params=page_params, headers=HEADERS)
+            if getattr(r, 'status_code', None) != 200:
+                break
+            j = r.json() if getattr(r, 'content', None) else {}
+            recs = j.get('records') or []
+            if not recs:
+                break
+
+            for d in recs:
+                unit_raw = (d.get('price_unit') or d.get('unit') or 'Rs./Quintal')
+                base_unit = _normalize_unit_text(unit_raw)
+                rec = {
+                    "market": d.get("market", ""),
+                    "district": d.get("district", ""),
+                    "state": d.get("state", ""),
+                    "variety": d.get("variety", None),
+                    "grade": d.get("grade", None),
+                    "min_price": int(d.get("min_price")) if d.get("min_price") and str(d.get("min_price")).isdigit() else None,
+                    "max_price": int(d.get("max_price")) if d.get("max_price") and str(d.get("max_price")).isdigit() else None,
+                    "modal_price": int(d.get("modal_price")) if d.get("modal_price") and str(d.get("modal_price")).isdigit() else None,
+                    "arrival_date": d.get("arrival_date") or d.get("date"),
+                    "price_unit_raw": unit_raw,
+                    "price_unit_base": base_unit,
+                    "price_unit": 'INR/kg',
+                }
+                rec['min_price_per_kg'] = _to_inr_per_kg(rec.get('min_price'), base_unit)
+                rec['max_price_per_kg'] = _to_inr_per_kg(rec.get('max_price'), base_unit)
+                rec['modal_price_per_kg'] = _to_inr_per_kg(rec.get('modal_price'), base_unit)
+                out.append(rec)
+                if len(out) >= max_records:
+                    break
+
+            if len(recs) < int(page_params.get('limit') or page_size):
+                break
+            offset += int(page_params.get('limit') or page_size)
         return out
+
+    try:
+        # 1) Try with arrival_date filter (most common)
+        if date_filters:
+            for df in date_filters:
+                p = dict(base_params)
+                p['filters[arrival_date]'] = df
+                rows = _fetch_pages(p)
+                if rows:
+                    return rows
+
+        # 2) Try with date filter key
+        if date_filters:
+            for df in date_filters:
+                p = dict(base_params)
+                p['filters[date]'] = df
+                rows = _fetch_pages(p)
+                if rows:
+                    return rows
+
+        # 3) No/unknown date filtering: return commodity/state/district slice
+        return _fetch_pages(base_params)
     except Exception as e:
         print("fetch_from_datagov error:", e)
         return []
@@ -6209,7 +6306,14 @@ def price():
             used_fallback = 'agmarknet-html'
         else:
             try:
-                dg_rows = fetch_from_datagov(resolved_commodity, limit=60)
+                dg_rows = fetch_from_datagov(
+                    resolved_commodity,
+                    limit=200,
+                    state=focus_state,
+                    district=focus_district,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
             except Exception:
                 dg_rows = []
             if dg_rows:
