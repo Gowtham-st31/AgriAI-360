@@ -3154,6 +3154,40 @@ def _apply_mandi_filters(items: list, *, from_date: str = None, to_date: str = N
     return out
 
 
+def _dedupe_mandi_items(items: list) -> list:
+    """Drop exact-duplicate mandi rows while keeping stable order."""
+    seen = set()
+    out = []
+
+    def _key(row: dict):
+        if not isinstance(row, dict):
+            return None
+        # Normalize strings; keep prices/date in the key so we only remove exact duplicates.
+        return (
+            _normalize_market_key_part(row.get('state')),
+            _normalize_market_key_part(row.get('district')),
+            _normalize_market_key_part(row.get('market')),
+            _normalize_market_key_part(row.get('commodity')),
+            _normalize_market_key_part(row.get('variety')),
+            _normalize_market_key_part(row.get('grade')),
+            str(row.get('price_date') or _normalize_price_date(row.get('arrival_date')) or ''),
+            _coerce_price_number(row.get('min_price')),
+            _coerce_price_number(row.get('max_price')),
+            _coerce_price_number(row.get('modal_price')),
+        )
+
+    for row in (items or []):
+        k = _key(row)
+        if k is None:
+            continue
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(row)
+
+    return out
+
+
 _MANDI_LOCATIONS_CACHE = {
     'fetched_at': None,
     'data': None,
@@ -6360,6 +6394,9 @@ def price():
         if not filtered_items:
             variety_not_found = True
         items = filtered_items
+
+    # Remove exact duplicates from upstream (common in fallback sources).
+    items = _dedupe_mandi_items(items)
 
     tmp_entry = dict(data if isinstance(data, dict) else {})
     tmp_entry['items'] = items
