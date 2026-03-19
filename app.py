@@ -3730,6 +3730,39 @@ _AGMARKNET_FILTERS_CACHE = {
     'data': None,
 }
 
+_AGMARKNET_FILTERS_SNAPSHOT_DEFAULT_PATH = os.path.join(
+    os.path.dirname(__file__),
+    'data',
+    'agmarknet_filters_snapshot_min.json',
+)
+
+
+def _load_agmarknet_filters_snapshot():
+    """Load a bundled filters snapshot.
+
+    This contains only reference metadata (commodities/states/districts/markets)
+    and is used as a fallback when live filter fetch is blocked (e.g., HTTP 403
+    from certain hosting egress IP ranges).
+    """
+    path = str(os.environ.get('AGMARKNET_FILTERS_SNAPSHOT_PATH') or '').strip() or _AGMARKNET_FILTERS_SNAPSHOT_DEFAULT_PATH
+    try:
+        if not path or not os.path.exists(path):
+            return None
+        with open(path, 'r', encoding='utf-8') as f:
+            jd = json.load(f)
+        if not isinstance(jd, dict):
+            return None
+        # Basic shape validation (keep permissive).
+        for k in ('cmdt_data', 'state_data', 'district_data', 'market_data'):
+            v = jd.get(k)
+            if v is None:
+                continue
+            if not isinstance(v, list):
+                return None
+        return jd
+    except Exception:
+        return None
+
 _AGMARKNET_LIVE_DATE_CACHE = {
     'fetched_at': None,
     'raw': None,
@@ -3800,12 +3833,22 @@ def _get_agmarknet_filters():
 
     url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/filters"
     session_obj = requests.Session()
-    r = _request_with_retry(session_obj, 'GET', url, headers=HEADERS)
-    jd = r.json() if r.content else {}
-    data = jd.get('data') or {}
-    _AGMARKNET_FILTERS_CACHE['fetched_at'] = now
-    _AGMARKNET_FILTERS_CACHE['data'] = data
-    return data
+    try:
+        r = _request_with_retry(session_obj, 'GET', url, headers=HEADERS)
+        if getattr(r, 'status_code', None) != 200:
+            raise RuntimeError(f'filters http {getattr(r, "status_code", None)}')
+        jd = r.json() if r.content else {}
+        data = jd.get('data') or {}
+        _AGMARKNET_FILTERS_CACHE['fetched_at'] = now
+        _AGMARKNET_FILTERS_CACHE['data'] = data
+        return data
+    except Exception:
+        snap = _load_agmarknet_filters_snapshot()
+        if snap is None:
+            raise
+        _AGMARKNET_FILTERS_CACHE['fetched_at'] = now
+        _AGMARKNET_FILTERS_CACHE['data'] = snap
+        return snap
 
 
 def probe_latest_source_date(commodity: str = None):
@@ -3869,23 +3912,8 @@ def fetch_from_agmarknet_api(
     session_obj = requests.Session()
 
     def get_filters_fast():
-        now = time.time()
-        fetched_at = _AGMARKNET_FILTERS_CACHE.get('fetched_at')
-        cached = _AGMARKNET_FILTERS_CACHE.get('data')
-        if fetched_at is not None and cached is not None and (now - fetched_at) < _agmarknet_filters_ttl_seconds():
-            return cached
-
-        url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/filters"
-        # Filters payload is fairly large (states/districts/markets/commodities).
-        # Use a slightly higher timeout for this one call; it's cached afterwards.
-        r = session_obj.get(url, headers=HEADERS, timeout=max(timeout_seconds, 30))
-        if r.status_code != 200:
-            raise RuntimeError(f'filters http {r.status_code}')
-        jd = r.json() if r.content else {}
-        data = (jd.get('data') or {}) if isinstance(jd, dict) else {}
-        _AGMARKNET_FILTERS_CACHE['fetched_at'] = now
-        _AGMARKNET_FILTERS_CACHE['data'] = data
-        return data
+        # Centralized so we can fall back to a bundled snapshot in production.
+        return _get_agmarknet_filters() or {}
 
     def get_live_date_raw_fast():
         now = time.time()
@@ -6521,7 +6549,7 @@ def weather_page():
 @app.route('/api/weather')
 def api_weather():
     """Proxy endpoint to fetch weather forecast and produce simple advice.
-    Accepts query parameters: lat, lon OR q (city name).
+    Accepts query parameters: lat, lon.
     Uses Open-Meteo (free, no API key required).
     Returns the upstream forecast JSON under `forecast` and an `advice` array.
     """
@@ -6556,33 +6584,30 @@ def api_weather():
         }
         return mapping.get(c, f'Weather code {c}')
 
-    def _open_meteo_geocode(name: str):
-        url = 'https://geocoding-api.open-meteo.com/v1/search'
-        r = requests.get(url, params={'name': name, 'count': 1, 'language': 'en', 'format': 'json'}, timeout=12)
-        if r.status_code != 200:
-            return None, None, {'error': 'Geocoding failed', 'details': r.text}
-        jd = r.json() if r.content else {}
-        results = jd.get('results') or []
-        if not results:
-            return None, None, {'error': 'Could not resolve location name'}
-        top = results[0]
-        return top.get('latitude'), top.get('longitude'), None
-
     def _open_meteo_fetch_onecall_like(lat_v, lon_v):
         url = 'https://api.open-meteo.com/v1/forecast'
         params = {
             'latitude': lat_v,
             'longitude': lon_v,
+            'current_weather': 'true',
             'hourly': 'temperature_2m,precipitation_probability,windspeed_10m,weathercode',
             'daily': 'temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max,weathercode',
             'timezone': 'auto',
             'forecast_days': 7,
         }
-        r = requests.get(url, params=params, timeout=12)
+        try:
+            r = requests.get(url, params=params, timeout=12)
+        except Exception as e:
+            return None, {'error': 'Weather provider timeout', 'details': str(e)[:180]}
         if r.status_code != 200:
-            return None, {'error': 'Weather provider error', 'details': r.text}
+            return None, {'error': 'Weather provider error', 'details': str(r.text or '')[:500]}
 
-        om = r.json() if r.content else {}
+        try:
+            om = r.json() if r.content else {}
+        except Exception:
+            om = {}
+        if not isinstance(om, dict) or not om:
+            return None, {'error': 'Empty weather response'}
         daily = (om or {}).get('daily') or {}
         times = daily.get('time') or []
         tmax = daily.get('temperature_2m_max') or []
@@ -6658,24 +6683,19 @@ def api_weather():
             'latitude': (om or {}).get('latitude'),
             'longitude': (om or {}).get('longitude'),
             'timezone': (om or {}).get('timezone'),
+            'current_weather': (om or {}).get('current_weather'),
             'hourly': out_hourly,
             'daily': out_daily,
         }
         return payload, None
 
-    lat = request.args.get('lat')
-    lon = request.args.get('lon')
-    q = request.args.get('q')
+    lat = _coerce_float(request.args.get('lat'))
+    lon = _coerce_float(request.args.get('lon'))
     try:
-        # Open-Meteo: free, no API key required
-        if (not lat or not lon) and q:
-            lat2, lon2, err = _open_meteo_geocode(q)
-            if err:
-                return jsonify(err), 502
-            lat, lon = lat2, lon2
-
-        if not lat or not lon:
-            return jsonify({'error': 'Provide lat & lon or q (city name) as query parameters.'}), 400
+        if lat is None or lon is None:
+            return jsonify({'error': 'Provide lat & lon as query parameters.'}), 400
+        if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
+            return jsonify({'error': 'Invalid lat/lon range.'}), 400
 
         payload, err = _open_meteo_fetch_onecall_like(lat, lon)
         if err:
@@ -7305,6 +7325,12 @@ def serve_i18n_js():
     # Serve the client-side translations file at top-level so pages
     # can include <script src="/i18n.js"></script> just like other helpers.
     return send_from_directory('static', 'i18n.js')
+
+
+@app.route('/ui-kit.js')
+def serve_ui_kit_js():
+    # Some pages reference ui-kit at the top-level path.
+    return send_from_directory('static', 'ui-kit.js')
 
 
 # Protect direct static access to the home page file. Some users may attempt to

@@ -11,3 +11,6 @@ model.keras
  
 # Data files (do not commit local JSON data)
 data/*.json
+
+# Bundled reference metadata (no mandi price storage)
+!data/agmarknet_filters_snapshot_min.json

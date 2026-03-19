@@ -44,7 +44,7 @@
       <span class="text-slate-500 text-sm text-center">or</span>
       <div class="relative flex-1">
         <i class="fa-solid fa-city absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
-        <input id="city-input" class="agri-input w-full pl-9 pr-4 py-3 rounded-xl text-sm" placeholder="e.g. Chennai">
+        <input id="city-input" class="agri-input w-full pl-9 pr-4 py-3 rounded-xl text-sm" placeholder="e.g. Thekkalur">
       </div>
       <button id="city-get" class="px-4 py-3 rounded-xl text-sm font-medium text-slate-400 flex items-center gap-2 transition-colors hover:text-white whitespace-nowrap" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)" data-i18n="weather.get">
         <i class="fa-solid fa-cloud-arrow-down"></i> Get Forecast
@@ -132,6 +132,38 @@
     }catch(e){showStatus('Could not fetch weather: '+e);return null}
   }
 
+  async function geocodePlaceNameToLatLon(name){
+    const q=(name||'').trim();
+    if(!q) return null;
+    // 1) Try Open-Meteo geocoding (free, no key)
+    try{
+      const url='https://geocoding-api.open-meteo.com/v1/search?'+new URLSearchParams({name:q,count:'1',language:'en',format:'json'}).toString();
+      const r=await fetch(url);
+      if(r.ok){
+        const jd=await r.json().catch(()=>null);
+        const top=jd && jd.results && jd.results[0];
+        if(top && typeof top.latitude==='number' && typeof top.longitude==='number'){
+          return {lat:top.latitude, lon:top.longitude};
+        }
+      }
+    }catch(e){}
+
+    // 2) Fallback to Nominatim (best-effort, may be rate-limited)
+    try{
+      const url='https://nominatim.openstreetmap.org/search?'+new URLSearchParams({q:q,format:'json',limit:'1'}).toString();
+      const r=await fetch(url);
+      if(r.ok){
+        const arr=await r.json().catch(()=>null);
+        const top=arr && arr[0];
+        const lat=top && parseFloat(top.lat);
+        const lon=top && parseFloat(top.lon);
+        if(isFinite(lat) && isFinite(lon)) return {lat:lat, lon:lon};
+      }
+    }catch(e){}
+
+    return null;
+  }
+
   document.getElementById('use-loc').addEventListener('click',()=>{
     if(!navigator.geolocation){showStatus('Geolocation not supported');return}
     showStatus('Requesting device location...');
@@ -147,8 +179,16 @@
   });
 
   document.getElementById('city-get').addEventListener('click',async()=>{
-    const q=document.getElementById('city-input').value.trim();if(!q){showStatus('Enter a city name');return}
-    const data=await callWeather({q:q});renderWeather(data);
+    const q=document.getElementById('city-input').value.trim();
+    if(!q){showStatus('Enter a location name or use my location');return}
+    showStatus('Finding location...');
+    const loc=await geocodePlaceNameToLatLon(q);
+    if(!loc){
+      showStatus('Could not resolve that location. Try a nearby town name or tap "Use my location".');
+      return;
+    }
+    const data=await callWeather({lat:loc.lat,lon:loc.lon});
+    renderWeather(data);
   });
   document.getElementById('city-input').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();document.getElementById('city-get').click();}});
 
