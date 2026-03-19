@@ -18,7 +18,10 @@
       '.animate-blob{animation:sblob 7s infinite}.delay-2s{animation-delay:2s}.delay-4s{animation-delay:4s}',
       '@keyframes sfadeUp{0%{opacity:0;transform:translateY(12px)}100%{opacity:1;transform:translateY(0)}}.fade-in{animation:sfadeUp .5s ease-out forwards}',
       '.file-drop-area.dragover{background:rgba(16,185,129,.1)!important;border-color:#10b981!important;transform:scale(1.02)}',
-      '.agri-input{width:100%;padding:10px 14px;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;font-size:14px;outline:none;transition:border-color .2s,box-shadow .2s;font-family:\'Poppins\',sans-serif}',
+      // Keep padding in a zero-specificity selector so Tailwind utilities like
+      // `pl-10` can override it (prevents icons/logos overlapping input text).
+      ':where(.agri-input){padding:10px 14px}',
+      '.agri-input{width:100%;border-radius:10px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);color:#f1f5f9;font-size:14px;outline:none;transition:border-color .2s,box-shadow .2s;font-family:\'Poppins\',sans-serif}',
       '.agri-input:focus{border-color:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.15)}.agri-input::placeholder{color:rgba(255,255,255,.3)}',
       '.agri-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 20px;border-radius:10px;border:none;cursor:pointer;font-size:14px;font-weight:600;font-family:\'Poppins\',sans-serif;transition:all .2s}',
       '.agri-btn-primary{background:linear-gradient(135deg,#10b981,#0ea5e9);color:#fff;box-shadow:0 4px 14px rgba(16,185,129,.3)}.agri-btn-primary:hover{opacity:.9;transform:translateY(-1px)}',

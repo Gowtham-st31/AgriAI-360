@@ -3717,9 +3717,13 @@ def resolve_commodity_name(raw_name: str, cache=None) -> dict:
 AGMARKNET_SEARCH_URL = "https://agmarknet.gov.in/SearchCmmMkt.aspx?CommName={commodity}"
 AGMARKNET_COMMODITY_URL = "https://agmarknet.gov.in/PriceAndArrivals/CommodityWisePrices.aspx?CommName={commodity}"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; FarmerAssistant/1.0; +http://localhost/)",
+    # Use a common desktop browser UA; some upstream endpoints return 403 for
+    # non-browser-like agents.
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
     "Referer": "https://agmarknet.gov.in/",
+    "Origin": "https://agmarknet.gov.in",
 }
 
 # AGMARKNET 2.0 (SPA) JSON API
@@ -4875,14 +4879,15 @@ def parse_price_table_from_soup(soup):
         rows_out.append(rec)
     return rows_out
 
-def fetch_from_agmarknet(commodity):
+def fetch_from_agmarknet(commodity, *, prefer_api: bool = True, max_pages: int = None):
     # Prefer the AGMARKNET 2.0 JSON API (SPA backend). Fall back to legacy HTML scraping.
-    try:
-        api_rows = _fetch_from_agmarknet_v1_api(commodity)
-        if api_rows:
-            return api_rows
-    except Exception as e:
-        print('agmarknet v1 api error:', e)
+    if prefer_api:
+        try:
+            api_rows = _fetch_from_agmarknet_v1_api(commodity)
+            if api_rows:
+                return api_rows
+        except Exception as e:
+            print('agmarknet v1 api error:', e)
 
     c = commodity.strip()
     try_urls = [
@@ -4932,7 +4937,14 @@ def fetch_from_agmarknet(commodity):
 
             queue = []
             visited_targets = set()
-            max_pages = _agmarknet_max_pages()
+            max_pages_eff = _agmarknet_max_pages()
+            try:
+                if max_pages is not None:
+                    max_pages_eff = int(max_pages)
+            except Exception:
+                max_pages_eff = _agmarknet_max_pages()
+            if max_pages_eff <= 0:
+                max_pages_eff = _agmarknet_max_pages()
 
             def enqueue_from_soup(page_soup):
                 hidden = _agmarknet_hidden_fields(page_soup)
@@ -4945,7 +4957,7 @@ def fetch_from_agmarknet(commodity):
             enqueue_from_soup(soup)
             pages_fetched = 1
 
-            while queue and pages_fetched < max_pages:
+            while queue and pages_fetched < max_pages_eff:
                 event_target, event_argument, hidden_fields = queue.pop(0)
                 target_key = (event_target, event_argument)
                 if target_key in visited_targets:
@@ -6164,6 +6176,8 @@ def price():
     #    after applying user filters; that is NOT a failure.
     live_rows = []
     live_err = None
+    primary_err = None
+    used_fallback = None
     try:
         live_rows, live_err = fetch_from_agmarknet_api(
             resolved_commodity,
@@ -6176,6 +6190,33 @@ def price():
     except Exception as e:
         live_rows, live_err = [], str(e)[:120]
 
+    primary_err = live_err
+
+    # 1b) If the JSON API is blocked from this host (common on some egress IPs),
+    # fall back to live HTML scraping (still no persistence).
+    def _looks_like_403(err: str) -> bool:
+        s = str(err or '').lower()
+        return '403' in s or 'forbidden' in s
+
+    if live_err is not None and _looks_like_403(live_err):
+        try:
+            html_rows = fetch_from_agmarknet(resolved_commodity, prefer_api=False, max_pages=8)
+        except Exception:
+            html_rows = []
+        if html_rows:
+            live_rows = html_rows
+            live_err = None
+            used_fallback = 'agmarknet-html'
+        else:
+            try:
+                dg_rows = fetch_from_datagov(resolved_commodity, limit=60)
+            except Exception:
+                dg_rows = []
+            if dg_rows:
+                live_rows = dg_rows
+                live_err = None
+                used_fallback = 'data-gov'
+
     if live_err is None:
         # Do NOT persist mandi prices anywhere; fetch and return only.
         items = _enrich_market_price_items(live_rows)
@@ -6183,7 +6224,7 @@ def price():
             'fetched_at': now_iso,
             'last_scraped_at': now_iso,
             'items': items,
-            'source': 'agmarknet',
+            'source': used_fallback or 'agmarknet',
         }
     else:
         # No cache fallback when persistence is disabled.
@@ -6256,6 +6297,7 @@ def price():
         "variety_not_found": variety_not_found,
         "live_fetch_failed": live_fetch_failed,
         "live_fetch_error": (live_err if live_fetch_failed else None),
+        "primary_fetch_error": (primary_err if primary_err else None),
         "new_data_available": False,
         "scrape_started": False,
         "market_not_updated_today": market_not_updated_today,
