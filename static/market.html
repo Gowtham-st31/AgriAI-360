@@ -31,6 +31,10 @@
     @media(max-width:640px){
       .search-row{flex-direction:column !important}
     }
+
+    /* Improve native select dropdown readability (options inherit agri-input color). */
+    select.agri-input{color-scheme:dark}
+    select.agri-input option{background:rgb(15,23,42);color:#f1f5f9}
   </style>
 </head>
 <body class="bg-slate-900 min-h-screen text-slate-100">
@@ -47,6 +51,35 @@
 
   <!-- Search -->
   <div class="glass-panel rounded-2xl p-5 mb-5">
+    <!-- Filters -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
+      <div class="lg:col-span-1">
+        <label class="block text-xs text-slate-400 mb-1">From Date</label>
+        <input type="date" id="from_date" class="agri-input w-full px-3 py-2 rounded-xl text-sm">
+      </div>
+      <div class="lg:col-span-1">
+        <label class="block text-xs text-slate-400 mb-1">To Date</label>
+        <input type="date" id="to_date" class="agri-input w-full px-3 py-2 rounded-xl text-sm">
+      </div>
+      <div class="lg:col-span-2">
+        <label class="block text-xs text-slate-400 mb-1">State</label>
+        <select id="state" class="agri-input w-full px-3 py-2 rounded-xl text-sm">
+          <option value="">All States</option>
+        </select>
+      </div>
+      <div class="lg:col-span-2">
+        <label class="block text-xs text-slate-400 mb-1">District</label>
+        <select id="district" class="agri-input w-full px-3 py-2 rounded-xl text-sm">
+          <option value="">All Districts</option>
+        </select>
+      </div>
+      <div class="lg:col-span-6 flex flex-wrap gap-2">
+        <button type="button" id="todayBtn" class="sort-btn" onclick="setTodayRange()">Today</button>
+        <button type="button" id="useLocationBtn" class="sort-btn" onclick="useMyLocation()">📍 Use My Location</button>
+        <span id="locationMeta" class="text-xs text-slate-400"></span>
+      </div>
+    </div>
+
     <div class="flex gap-3 items-stretch search-row" style="flex-direction:row">
       <div class="relative flex-1">
         <i class="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs pointer-events-none"></i>
@@ -80,6 +113,8 @@
 
 <script>
 let MARKET_DATA = [];
+let LOCATION_DATA = { states: [], districts_by_state: {} };
+let CURRENT_LOCATION = null; // { lat, lon }
 
 const KNOWN_COMMODITIES = [
   'Tomato', 'Onion', 'Potato', 'Banana', 'Paddy', 'Maize', 'Cotton',
@@ -135,7 +170,25 @@ async function getPrice() {
   document.getElementById("updateMeta").innerHTML = "";
 
   try {
-    const res = await fetch('/price?commodity='+encodeURIComponent(c)+'&ai=1&strict=1');
+    const params = new URLSearchParams();
+    params.set('commodity', c);
+    params.set('ai', '1');
+
+    const fromDate = (document.getElementById('from_date') || {}).value || '';
+    const toDate = (document.getElementById('to_date') || {}).value || '';
+    const state = (document.getElementById('state') || {}).value || '';
+    const district = (document.getElementById('district') || {}).value || '';
+
+    if (fromDate) params.set('from_date', fromDate);
+    if (toDate) params.set('to_date', toDate);
+    if (state) params.set('state', state);
+    if (district) params.set('district', district);
+    if (CURRENT_LOCATION && CURRENT_LOCATION.lat != null && CURRENT_LOCATION.lon != null) {
+      params.set('lat', String(CURRENT_LOCATION.lat));
+      params.set('lon', String(CURRENT_LOCATION.lon));
+    }
+
+    const res = await fetch('/price?' + params.toString());
     const data = await res.json();
     if (!data.success) {
       document.getElementById("resultBox").innerHTML = '<div class="text-red-400 text-sm">'+(data.msg || "Could not load data")+'</div>';
@@ -143,8 +196,13 @@ async function getPrice() {
     }
     MARKET_DATA = data.data;
     displayUpdateMeta(data);
-      displayResolvedCommodity(data.commodity);
+    displayResolvedCommodity(data.commodity_meta);
     displayAiSummary(data.ai);
+    if (data.variety_not_found === true) {
+      document.getElementById("resultBox").innerHTML = '<div class="text-amber-300 text-sm">Variety not found for this commodity.</div>';
+      document.getElementById("aiBox").innerHTML = '';
+      return;
+    }
     displayResults(MARKET_DATA);
   } catch (err) {
     document.getElementById("resultBox").innerHTML = '<div class="text-red-400 text-sm">Could not connect to server</div>';
@@ -152,6 +210,224 @@ async function getPrice() {
     setGetPriceLoading(false);
   }
 }
+
+function ymdToday() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function setTodayRange() {
+  const today = ymdToday();
+  const fromEl = document.getElementById('from_date');
+  const toEl = document.getElementById('to_date');
+  if (fromEl) fromEl.value = today;
+  if (toEl) toEl.value = today;
+}
+
+function ensureOptionAndSelect(selectEl, value) {
+  if (!selectEl) return '';
+  const text = String(value || '').trim();
+  if (!text) return '';
+
+  let selected = selectOptionBestEffort(selectEl, text);
+  if (selected) return selected;
+
+  // If reverse-geocoded value is not in current dropdown, add it so the user
+  // still gets auto-filled state/district as requested.
+  const opt = document.createElement('option');
+  opt.value = text;
+  opt.textContent = text;
+  selectEl.appendChild(opt);
+  selectEl.value = text;
+  return selectEl.value;
+}
+
+function normalizeLocationText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\b(dist\.?|district)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[^a-z0-9 ]+/g, '')
+    .trim();
+}
+
+function selectOptionBestEffort(selectEl, desiredValue) {
+  if (!selectEl) return '';
+  const desired = String(desiredValue || '').trim();
+  if (!desired) return '';
+
+  // Exact
+  selectEl.value = desired;
+  if (selectEl.value === desired) return selectEl.value;
+
+  const needle = normalizeLocationText(desired);
+  if (!needle) return '';
+  const options = Array.from(selectEl.options || []);
+  const exactNorm = options.find(o => normalizeLocationText(o.value) === needle);
+  if (exactNorm) {
+    selectEl.value = exactNorm.value;
+    return selectEl.value;
+  }
+  const contains = options.find(o => normalizeLocationText(o.value).includes(needle) || needle.includes(normalizeLocationText(o.value)));
+  if (contains) {
+    selectEl.value = contains.value;
+    return selectEl.value;
+  }
+  return '';
+}
+
+async function useMyLocation() {
+  const meta = document.getElementById('locationMeta');
+  if (!navigator.geolocation) {
+    if (meta) meta.textContent = 'Geolocation not supported.';
+    return;
+  }
+  if (meta) meta.textContent = 'Detecting location...';
+  navigator.geolocation.getCurrentPosition(pos => {
+    CURRENT_LOCATION = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    if (meta) meta.textContent = `Using location (${CURRENT_LOCATION.lat.toFixed(4)}, ${CURRENT_LOCATION.lon.toFixed(4)})`;
+
+    // Auto-fill state & district (best-effort)
+    (async () => {
+      try {
+        if (!LOCATION_DATA || !Array.isArray(LOCATION_DATA.states) || LOCATION_DATA.states.length === 0) {
+          await initMandiLocations();
+        }
+        const params = new URLSearchParams({ lat: String(CURRENT_LOCATION.lat), lon: String(CURRENT_LOCATION.lon) });
+
+        let state = '';
+        let district = '';
+        let reverseError = '';
+
+        // Prefer backend reverse (keeps calls server-side when possible).
+        try {
+          const res = await fetch('/geo/reverse?' + params.toString());
+          const data = await res.json().catch(() => null);
+          if (res.ok && data && data.success === true) {
+            state = data.state || '';
+            district = data.district || '';
+          } else {
+            reverseError = (data && (data.msg || data.error)) ? String(data.msg || data.error) : `HTTP ${res.status}`;
+          }
+        } catch (e) {
+          reverseError = String(e && e.message ? e.message : e || '').slice(0, 160);
+        }
+
+        // Fallback: client-side reverse geocode (helps when server outbound is blocked).
+        if (!state && !district) {
+          try {
+            const nomParams = new URLSearchParams({
+              format: 'jsonv2',
+              lat: String(CURRENT_LOCATION.lat),
+              lon: String(CURRENT_LOCATION.lon),
+              zoom: '10',
+              addressdetails: '1'
+            });
+            const res2 = await fetch('https://nominatim.openstreetmap.org/reverse?' + nomParams.toString());
+            const jd = await res2.json().catch(() => null);
+            const addr = (jd && jd.address) ? jd.address : {};
+            state = String(addr.state || addr.region || '').trim();
+            district = String(
+              addr.state_district ||
+              addr.district ||
+              addr.county ||
+              addr.city_district ||
+              ''
+            ).trim();
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        if (!state && !district) {
+          if (meta) {
+            const base = `Using location (${CURRENT_LOCATION.lat.toFixed(4)}, ${CURRENT_LOCATION.lon.toFixed(4)})`;
+            meta.textContent = reverseError ? `${base} • Could not detect State/District (${reverseError})` : `${base} • Could not detect State/District`;
+          }
+          return;
+        }
+
+        const stateEl = document.getElementById('state');
+        const districtEl = document.getElementById('district');
+        let selectedState = '';
+        if (stateEl && state) {
+          selectedState = ensureOptionAndSelect(stateEl, state);
+          populateDistrictsForState(selectedState || stateEl.value || '');
+        }
+        if (districtEl && district) {
+          ensureOptionAndSelect(districtEl, district);
+        }
+
+        if (meta && (state || district)) {
+          const shownState = selectedState || stateEl?.value || state;
+          const shownDistrict = districtEl?.value || district;
+          meta.textContent = `Using location (${CURRENT_LOCATION.lat.toFixed(4)}, ${CURRENT_LOCATION.lon.toFixed(4)}) • ${shownState}${shownDistrict ? ' / ' + shownDistrict : ''}`;
+        }
+      } catch (e) {
+        if (meta) {
+          const base = `Using location (${CURRENT_LOCATION.lat.toFixed(4)}, ${CURRENT_LOCATION.lon.toFixed(4)})`;
+          const msg = String(e && e.message ? e.message : e || '').slice(0, 120);
+          meta.textContent = msg ? `${base} • Auto-fill failed (${msg})` : `${base} • Auto-fill failed`;
+        }
+      }
+    })();
+  }, () => {
+    if (meta) meta.textContent = 'Location access denied.';
+  }, { enableHighAccuracy: false, maximumAge: 600000, timeout: 10000 });
+}
+
+function populateStates() {
+  const stateEl = document.getElementById('state');
+  if (!stateEl) return;
+  const current = stateEl.value || '';
+  stateEl.innerHTML = '<option value="">All States</option>';
+  (LOCATION_DATA.states || []).forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    stateEl.appendChild(opt);
+  });
+  stateEl.value = current;
+}
+
+function populateDistrictsForState(state) {
+  const districtEl = document.getElementById('district');
+  if (!districtEl) return;
+  const districts = (LOCATION_DATA.districts_by_state || {})[state] || [];
+  districtEl.innerHTML = '<option value="">All Districts</option>';
+  districts.forEach(d => {
+    const opt = document.createElement('option');
+    opt.value = d;
+    opt.textContent = d;
+    districtEl.appendChild(opt);
+  });
+  districtEl.value = '';
+}
+
+async function initMandiLocations() {
+  try {
+    const res = await fetch('/price/locations');
+    const data = await res.json();
+    if (data && data.success === true) {
+      LOCATION_DATA = data;
+      populateStates();
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+document.getElementById('state').addEventListener('change', () => {
+  const st = (document.getElementById('state') || {}).value || '';
+  populateDistrictsForState(st);
+});
+
+initMandiLocations();
+setTodayRange();
 
 function displayResolvedCommodity(meta) {
   const box = document.getElementById('searchMeta');
@@ -251,7 +527,7 @@ function displayUpdateMeta(payload) {
 
 function displayResults(data) {
     let html = "";
-    if (data.length === 0) { html = '<div class="text-slate-500 text-sm italic">No data available for this commodity.</div>'; }
+  if (data.length === 0) { html = '<div class="text-slate-500 text-sm italic">No data available for the selected filters. Try changing the district, state, or date range.</div>'; }
 
     data.forEach(m => {
       const itemFreshness = String(m.price_freshness || 'Old');

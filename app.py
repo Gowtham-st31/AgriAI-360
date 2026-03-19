@@ -10,6 +10,7 @@ import smtplib
 import random
 import difflib
 import html
+import math
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import time
@@ -381,8 +382,20 @@ MANDI_PRICE_LATEST_COLLECTION = 'mandi_prices_latest'
 MANDI_PRICE_HISTORY_COLLECTION = 'mandi_prices_history'
 
 
+def _mandi_price_db_enabled() -> bool:
+    """Whether mandi-price data is allowed to be stored in MongoDB.
+
+    Default: disabled. Enable only if you explicitly want mandi price search/cache
+    results persisted in Atlas.
+
+    Set `ENABLE_MANDI_PRICE_DB=1` to enable.
+    """
+    raw = str(os.environ.get('ENABLE_MANDI_PRICE_DB', '') or '').strip().lower()
+    return raw in ('1', 'true', 'yes', 'on')
+
+
 def _ensure_price_indexes():
-    if mongo_db is None:
+    if mongo_db is None or not _mandi_price_db_enabled():
         return
     try:
         coll = mongo_db.get_collection(PRICE_COLLECTION)
@@ -1680,8 +1693,8 @@ def _send_email_now_or_async(email: str, otp: str):
 @app.route("/auth/request_otp", methods=["POST"])
 def request_otp():
     try:
-        data = request.get_json()
-        email = data.get("email")
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip()
 
         if not email:
             return jsonify({"success": False, "message": "Email required"}), 400
@@ -1712,9 +1725,8 @@ def request_otp():
                 return jsonify({
                     "success": False,
                     "message": "Brevo OTP email failed",
-                    "hint": "Check BREVO_API_KEY, BREVO_FROM (verified sender), and Render outbound HTTPS access. See server logs for Brevo response."
+                    "hint": "Check BREVO_API_KEY, BREVO_FROM (verified sender), and server HTTPS access. See server logs for Brevo response."
                 }), 502
-
             return jsonify({
                 "success": False,
                 "message": "Failed to send OTP email",
@@ -2811,6 +2823,9 @@ def _read_price_cache_file():
     if os.path.exists(CACHE_FILE):
         try:
             return json.load(open(CACHE_FILE, "r", encoding="utf-8"))
+        except json.JSONDecodeError:
+            # Treat empty/partial files as no cache (avoid noisy warnings).
+            return {"last_updated": None, "commodities": {}}
         except Exception as e:
             print("Warning: failed to read cache:", e)
     return {"last_updated": None, "commodities": {}}
@@ -2888,10 +2903,10 @@ def _enrich_market_price_items(items):
     return [_enrich_market_price_item(row, today_date=today_date) for row in (items or [])]
 
 def load_cache():
-    # Prefer Mongo-stored cache when available
+    # Prefer Mongo-stored cache when available (if enabled)
     mongo_cache = None
     try:
-        if mongo_db is not None:
+        if mongo_db is not None and _mandi_price_db_enabled():
             coll = mongo_db.get_collection(PRICE_COLLECTION)
             meta_doc = coll.find_one({'_id': PRICE_META_DOC_ID}, {'_id': 0}) or {}
             cache = {
@@ -2929,9 +2944,9 @@ def load_cache():
     return file_cache
 
 def save_cache(cache):
-    # Prefer storing cache to Mongo when available
+    # Prefer storing cache to Mongo when available (if enabled)
     try:
-        if mongo_db is not None:
+        if mongo_db is not None and _mandi_price_db_enabled():
             coll = mongo_db.get_collection(PRICE_COLLECTION)
             commodities = (cache or {}).get('commodities') or {}
             now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
@@ -3064,6 +3079,350 @@ def _filter_mandi_items_by_variety(items: list, variety_query: str) -> list:
         if matches(candidate):
             out.append(row)
     return out
+
+
+def _parse_ymd_date(value: str):
+    text = str(value or '').strip()
+    if not text:
+        return None
+    # Accept UI/date-picker and API date shapes (e.g. YYYY-MM-DD, DD-MM-YYYY).
+    parsed = _parse_arrival_date(text)
+    if parsed is None:
+        return None
+    return parsed.date()
+
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    try:
+        lat1 = float(lat1)
+        lon1 = float(lon1)
+        lat2 = float(lat2)
+        lon2 = float(lon2)
+    except Exception:
+        return None
+    r = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _coerce_float(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _apply_mandi_filters(items: list, *, from_date: str = None, to_date: str = None, state: str = None, district: str = None):
+    out = []
+    from_d = _parse_ymd_date(from_date)
+    to_d = _parse_ymd_date(to_date)
+
+    def _loc_key(value: str) -> str:
+        s = str(value or '').strip().lower()
+        # AGMARKNET can include suffixes like "Dist." / "District".
+        s = re.sub(r'\b(dist\.?|district)\b', ' ', s)
+        s = re.sub(r'[^a-z0-9]+', ' ', s)
+        return re.sub(r'\s+', ' ', s).strip()
+
+    state_norm = _loc_key(state)
+    district_norm = _loc_key(district)
+
+    for row in (items or []):
+        if not isinstance(row, dict):
+            continue
+
+        if state_norm:
+            if _loc_key(row.get('state')) != state_norm:
+                continue
+        if district_norm:
+            if _loc_key(row.get('district')) != district_norm:
+                continue
+
+        if from_d or to_d:
+            row_date = _parse_ymd_date(row.get('price_date') or _normalize_price_date(row.get('arrival_date')))
+            if row_date is None:
+                continue
+            if from_d and row_date < from_d:
+                continue
+            if to_d and row_date > to_d:
+                continue
+
+        out.append(row)
+
+    return out
+
+
+_MANDI_LOCATIONS_CACHE = {
+    'fetched_at': None,
+    'data': None,
+}
+
+
+def _mandi_locations_ttl_seconds() -> int:
+    raw = str(os.environ.get('MANDI_LOCATIONS_TTL_SECONDS', '21600') or '').strip()  # 6h
+    try:
+        val = int(raw)
+        return val if val > 0 else 21600
+    except Exception:
+        return 21600
+
+
+def _get_mandi_locations():
+    now = time.time()
+    fetched_at = _MANDI_LOCATIONS_CACHE.get('fetched_at')
+    cached = _MANDI_LOCATIONS_CACHE.get('data')
+    if fetched_at is not None and cached is not None and (now - fetched_at) < _mandi_locations_ttl_seconds():
+        try:
+            if isinstance(cached, dict) and (cached.get('states') or []):
+                return cached
+        except Exception:
+            pass
+
+    states = set()
+    districts_by_state = {}
+
+    if mongo_db is not None and _mandi_price_db_enabled():
+        try:
+            coll = mongo_db.get_collection(MANDI_PRICE_LATEST_COLLECTION)
+            raw_states = coll.distinct('state')
+            for s in raw_states:
+                ss = str(s or '').strip()
+                if not ss:
+                    continue
+                states.add(ss)
+
+            # Build districts map for first N states to keep it snappy.
+            for state_value in sorted(states)[:200]:
+                raw_districts = coll.distinct('district', {'state': state_value})
+                ds = sorted({str(d or '').strip() for d in raw_districts if str(d or '').strip()})
+                districts_by_state[state_value] = ds
+        except Exception as e:
+            print('mandi locations mongo error:', e)
+
+    # Fallback: scan cached commodity entries.
+    if not states:
+        try:
+            cache = load_cache()
+            commodities = (cache.get('commodities') or {}) if isinstance(cache, dict) else {}
+            for entry in commodities.values():
+                for row in (entry or {}).get('items') or []:
+                    st = str((row or {}).get('state') or '').strip()
+                    dt = str((row or {}).get('district') or '').strip()
+                    if st:
+                        states.add(st)
+                        if dt:
+                            districts_by_state.setdefault(st, set()).add(dt)
+            districts_by_state = {k: sorted(list(v)) for k, v in districts_by_state.items()}
+        except Exception:
+            states = set()
+            districts_by_state = {}
+
+    # Final fallback: use live AGMARKNET filters (no persistence required).
+    if not states:
+        try:
+            filters = _get_agmarknet_filters() or {}
+            state_data = filters.get('state_data') or []
+            district_data = filters.get('district_data') or []
+
+            state_name_by_id = {}
+            for row in state_data:
+                sid = (row or {}).get('state_id')
+                sname = str((row or {}).get('state_name') or '').strip()
+                if sid is None or not sname:
+                    continue
+                if sname.lower() == 'all states':
+                    continue
+                state_name_by_id[sid] = sname
+                states.add(sname)
+
+            tmp = {}
+            for row in district_data:
+                sid = (row or {}).get('state_id')
+                dname = str((row or {}).get('district_name') or '').strip()
+                if sid is None or not dname:
+                    continue
+                sname = state_name_by_id.get(sid)
+                if not sname:
+                    continue
+                if dname.lower() in ('all districts',):
+                    continue
+                tmp.setdefault(sname, set()).add(dname)
+
+            districts_by_state = {k: sorted(list(v)) for k, v in tmp.items()}
+        except Exception as e:
+            print('mandi locations agmarknet filters error:', e)
+
+    data = {
+        'states': sorted(states),
+        'districts_by_state': districts_by_state,
+    }
+    _MANDI_LOCATIONS_CACHE['fetched_at'] = now
+    _MANDI_LOCATIONS_CACHE['data'] = data
+    return data
+
+
+@app.route('/price/locations')
+def price_locations():
+    return jsonify({'success': True, **_get_mandi_locations()})
+
+
+@app.route('/geo/reverse')
+def geo_reverse():
+    """Reverse geocode lat/lon to (state, district) for UI auto-fill.
+
+    Uses OpenStreetMap Nominatim. Best-effort only.
+    """
+    lat = _coerce_float(request.args.get('lat'))
+    lon = _coerce_float(request.args.get('lon'))
+    if lat is None or lon is None:
+        return jsonify({'success': False, 'msg': 'lat and lon required'}), 400
+
+    url = 'https://nominatim.openstreetmap.org/reverse'
+    params = {
+        'format': 'jsonv2',
+        'lat': lat,
+        'lon': lon,
+        'zoom': 10,
+        'addressdetails': 1,
+    }
+    headers = {
+        'User-Agent': 'AgriAI360/1.0 (market location autofill)',
+        'Accept': 'application/json',
+    }
+
+    def _norm_loc_text(value: str) -> str:
+        try:
+            s = str(value or '').strip().lower()
+        except Exception:
+            return ''
+        s = re.sub(r'\b(dist\.?|district)\b', ' ', s)
+        s = re.sub(r'[^a-z0-9]+', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    def _best_match(desired: str, candidates: list[str]) -> str | None:
+        desired = str(desired or '').strip()
+        if not desired or not candidates:
+            return None
+        if desired in candidates:
+            return desired
+
+        needle = _norm_loc_text(desired)
+        if not needle:
+            return None
+        for c in candidates:
+            if _norm_loc_text(c) == needle:
+                return c
+        for c in candidates:
+            cn = _norm_loc_text(c)
+            if cn and (cn in needle or needle in cn):
+                return c
+        return None
+
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=6)
+        if r.status_code != 200:
+            return jsonify({'success': False, 'msg': 'reverse geocode failed'}), 502
+        jd = r.json() if r.content else {}
+        addr = (jd.get('address') or {}) if isinstance(jd, dict) else {}
+
+        raw_state = str(addr.get('state') or addr.get('region') or '').strip() or None
+        raw_district = str(
+            addr.get('state_district') or
+            addr.get('district') or
+            addr.get('county') or
+            addr.get('city_district') or
+            ''
+        ).strip() or None
+
+        # Map to known dropdown values when possible.
+        known = _get_mandi_locations() or {}
+        known_states = list(known.get('states') or [])
+        matched_state = _best_match(raw_state, known_states) if raw_state else None
+
+        matched_district = None
+        if raw_district and matched_state:
+            districts_by_state = known.get('districts_by_state') or {}
+            known_districts = list((districts_by_state.get(matched_state) or []))
+            matched_district = _best_match(raw_district, known_districts)
+
+        return jsonify({
+            'success': True,
+            'state': matched_state or raw_state,
+            'district': matched_district or raw_district,
+            'raw_state': raw_state,
+            'raw_district': raw_district,
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'msg': 'reverse geocode error', 'error': str(e)[:160]}), 502
+
+
+def _query_mandi_from_mongo(
+    *,
+    commodity: str,
+    from_date: str = None,
+    to_date: str = None,
+    state: str = None,
+    district: str = None,
+    limit: int = 250,
+):
+    if mongo_db is None or not _mandi_price_db_enabled():
+        return None
+
+    commodity_text = str(commodity or '').strip()
+    if not commodity_text:
+        return None
+
+    from_d = _parse_ymd_date(from_date)
+    to_d = _parse_ymd_date(to_date)
+
+    use_history = bool(from_d or to_d)
+    coll_name = MANDI_PRICE_HISTORY_COLLECTION if use_history else MANDI_PRICE_LATEST_COLLECTION
+    coll = mongo_db.get_collection(coll_name)
+
+    query = {
+        'commodity': {'$regex': f"^{re.escape(commodity_text)}$", '$options': 'i'}
+    }
+    if state:
+        query['state'] = {'$regex': f"^{re.escape(str(state).strip())}$", '$options': 'i'}
+    if district:
+        query['district'] = {'$regex': f"^{re.escape(str(district).strip())}$", '$options': 'i'}
+    if from_d or to_d:
+        date_q = {}
+        if from_d:
+            date_q['$gte'] = from_d.isoformat()
+        if to_d:
+            date_q['$lte'] = to_d.isoformat()
+        query['price_date'] = date_q
+
+    projection = {
+        '_id': 0,
+        'state': 1,
+        'district': 1,
+        'market': 1,
+        'commodity': 1,
+        'variety': 1,
+        'grade': 1,
+        'arrival_date': 1,
+        'price_date': 1,
+        'min_price': 1,
+        'max_price': 1,
+        'modal_price': 1,
+    }
+
+    cursor = coll.find(query, projection)
+    if use_history:
+        cursor = cursor.sort('price_date', -1)
+    cursor = cursor.limit(int(limit) if limit else 250)
+
+    rows = []
+    for doc in cursor:
+        row = dict(doc)
+        row.setdefault('price_unit', 'INR/kg')
+        rows.append(row)
+    return _enrich_market_price_items(rows)
 
 
 def _price_cache_ttl_hours() -> int:
@@ -3377,8 +3736,13 @@ _AGMARKNET_LIVE_DATE_CACHE = {
     'date': None,
 }
 
-_PRICE_SCRAPE_LOCK = threading.Lock()
-_PRICE_SCRAPES_IN_PROGRESS = {}
+
+def _ymd_to_agmarknet_date(value: str) -> str:
+    """Convert YYYY-MM-DD to MM-DD-YYYY for AGMARKNET API."""
+    parsed = _parse_ymd_date(value)
+    if parsed is None:
+        return None
+    return parsed.strftime('%m-%d-%Y')
 
 def _agmarknet_api_timeout_seconds() -> int:
     raw = str(os.environ.get('AGMARKNET_API_TIMEOUT_SECONDS', '15') or '').strip()
@@ -3484,36 +3848,616 @@ def _agmarknet_live_date_raw_string():
     return raw or None
 
 
-def _try_start_background_price_scrape(commodity_name: str) -> bool:
-    """Start a background refresh for the commodity if not already running.
+def fetch_from_agmarknet_api(
+    commodity: str,
+    *,
+    from_date: str = None,
+    to_date: str = None,
+    state: str = None,
+    district: str = None,
+    timeout_seconds: int = 8,
+):
+    """Fast live fetch from AGMARKNET v1 API.
 
-    This keeps /price non-blocking while allowing the cache to catch up.
+    - Always uses a short timeout to avoid worker timeouts.
+    - Returns (records, error_message_or_None)
     """
-    name = str(commodity_name or '').strip()
-    if not name:
-        return False
-    key = norm(name)
-    if not key:
-        return False
+    commodity_text = str(commodity or '').strip()
+    if not commodity_text:
+        return [], 'missing-commodity'
 
-    with _PRICE_SCRAPE_LOCK:
-        existing = _PRICE_SCRAPES_IN_PROGRESS.get(key)
-        if existing and existing.get('thread') and existing['thread'].is_alive():
-            return False
+    session_obj = requests.Session()
 
-        def _runner():
-            try:
-                update_prices_for_commodity(name, force=True)
-            except Exception as e:
-                print('background price scrape error for', key, ':', e)
-            finally:
-                with _PRICE_SCRAPE_LOCK:
-                    _PRICE_SCRAPES_IN_PROGRESS.pop(key, None)
+    def get_filters_fast():
+        now = time.time()
+        fetched_at = _AGMARKNET_FILTERS_CACHE.get('fetched_at')
+        cached = _AGMARKNET_FILTERS_CACHE.get('data')
+        if fetched_at is not None and cached is not None and (now - fetched_at) < _agmarknet_filters_ttl_seconds():
+            return cached
 
-        t = threading.Thread(target=_runner, name=f"price-scrape:{key}", daemon=True)
-        _PRICE_SCRAPES_IN_PROGRESS[key] = {'thread': t, 'started_at': time.time()}
-        t.start()
-        return True
+        url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/filters"
+        # Filters payload is fairly large (states/districts/markets/commodities).
+        # Use a slightly higher timeout for this one call; it's cached afterwards.
+        r = session_obj.get(url, headers=HEADERS, timeout=max(timeout_seconds, 30))
+        if r.status_code != 200:
+            raise RuntimeError(f'filters http {r.status_code}')
+        jd = r.json() if r.content else {}
+        data = (jd.get('data') or {}) if isinstance(jd, dict) else {}
+        _AGMARKNET_FILTERS_CACHE['fetched_at'] = now
+        _AGMARKNET_FILTERS_CACHE['data'] = data
+        return data
+
+    def get_live_date_raw_fast():
+        now = time.time()
+        fetched_at = _AGMARKNET_LIVE_DATE_CACHE.get('fetched_at')
+        cached_raw = _AGMARKNET_LIVE_DATE_CACHE.get('raw')
+        cached_date = _AGMARKNET_LIVE_DATE_CACHE.get('date')
+        if fetched_at is not None and cached_raw and cached_date is not None and (now - fetched_at) < _agmarknet_live_date_ttl_seconds():
+            return str(cached_raw).strip() or None
+
+        url = f"{AGMARKNET_V1_API_BASE}/agmarknet-live-date"
+        r = session_obj.get(url, headers=HEADERS, timeout=timeout_seconds)
+        if r.status_code != 200:
+            raise RuntimeError(f'live-date http {r.status_code}')
+        jd = r.json() if r.content else {}
+        raw = None
+        if isinstance(jd, dict) and str(jd.get('status') or '').lower() in ('success', 'true'):
+            rows = jd.get('data') or []
+            if rows and isinstance(rows[0], dict):
+                raw = rows[0].get('live_date')
+        parsed = _parse_agmarknet_live_date(raw)
+        _AGMARKNET_LIVE_DATE_CACHE['fetched_at'] = now
+        _AGMARKNET_LIVE_DATE_CACHE['raw'] = raw
+        _AGMARKNET_LIVE_DATE_CACHE['date'] = parsed
+        return str(raw or '').strip() or None
+
+    # Resolve commodity IDs (cached in-process; if cache empty this will call upstream with short timeout).
+    try:
+        filters = get_filters_fast() or {}
+    except Exception as e:
+        return [], f'filters-error:{str(e)[:120]}'
+
+    cmdt_data = filters.get('cmdt_data') or []
+    requested_key = _commodity_lookup_key(commodity_text)
+    cmdt_match = None
+    for row in cmdt_data:
+        name = str((row or {}).get('cmdt_name') or '').strip()
+        if not name:
+            continue
+        if _commodity_lookup_key(name) == requested_key:
+            cmdt_match = row
+            break
+    if not cmdt_match:
+        return [], 'commodity-not-found'
+
+    cmdt_id = cmdt_match.get('cmdt_id')
+    group_id = cmdt_match.get('cmdt_group_id')
+    if cmdt_id is None or group_id is None:
+        return [], 'commodity-id-missing'
+
+    # NOTE: Don't use commodity normalization for locations. AGMARKNET often
+    # includes suffixes like "Dist."; use location normalization instead.
+    state_key = _commodity_lookup_key(state) if state else ''
+    district_key = _commodity_lookup_key(district) if district else ''
+
+    # AGMARKNET SPA uses these sentinel IDs to represent "All".
+    AG_ALL_STATES_ID = 100006
+    AG_ALL_DISTRICTS_ID = 100007
+    AG_ALL_MARKETS_ID = 100009
+
+    def _report_page_size() -> int:
+        raw = str(os.environ.get('AGMARKNET_REPORT_PAGE_SIZE', '100') or '').strip()
+        try:
+            val = int(raw)
+            return val if val > 0 else 100
+        except Exception:
+            return 100
+
+    def _report_max_pages() -> int:
+        raw = str(os.environ.get('AGMARKNET_REPORT_MAX_PAGES', '30') or '').strip()
+        try:
+            val = int(raw)
+            return val if val > 0 else 30
+        except Exception:
+            return 30
+
+    def _extract_report_rows(jd) -> list:
+        if not isinstance(jd, dict):
+            return []
+        if not jd.get('status'):
+            return []
+        data = jd.get('data') or {}
+        if not isinstance(data, dict):
+            return []
+        records = data.get('records') or []
+        if not records or not isinstance(records, list):
+            return []
+        first = records[0] if records else None
+        if not isinstance(first, dict):
+            return []
+        d = first.get('data')
+        # Observed response shapes:
+        # 1) records[0].data == [ { data: [rows...] } ]
+        # 2) records[0].data == [rows...]
+        if isinstance(d, list) and d:
+            if isinstance(d[0], dict) and 'data' in d[0]:
+                inner = d[0].get('data') or []
+                return inner if isinstance(inner, list) else []
+            return d
+        return []
+
+    def _extract_report_total_pages(jd):
+        try:
+            if not isinstance(jd, dict) or not jd.get('status'):
+                return None
+            data = jd.get('data') or {}
+            if not isinstance(data, dict):
+                return None
+            records = data.get('records') or []
+            if not records or not isinstance(records, list) or not isinstance(records[0], dict):
+                return None
+            pagination = records[0].get('pagination')
+            if isinstance(pagination, list) and pagination and isinstance(pagination[0], dict):
+                tp = pagination[0].get('total_pages')
+                if tp is None:
+                    return None
+                tp_int = int(tp)
+                return tp_int if tp_int > 0 else None
+            return None
+        except Exception:
+            return None
+
+    def _norm_loc_key(value: str) -> str:
+        try:
+            s = str(value or '').strip().lower()
+        except Exception:
+            return ''
+        s = re.sub(r'\b(dist\.?|district)\b', ' ', s)
+        s = re.sub(r'[^a-z0-9]+', ' ', s)
+        s = re.sub(r'\s+', ' ', s).strip()
+        return s
+
+    desired_state_norm = _norm_loc_key(state) if state else ''
+    desired_district_norm = _norm_loc_key(district) if district else ''
+
+    # Resolve state/district IDs when user supplies location filters.
+    state_id = None
+    district_id = None
+    try:
+        state_text = str(state or '').strip()
+        district_text = str(district or '').strip()
+        state_data = filters.get('state_data') or []
+        district_data = filters.get('district_data') or []
+
+        if state_text:
+            wanted = _norm_loc_key(state_text)
+            for row in state_data:
+                name = str((row or {}).get('state_name') or '').strip()
+                if name and _norm_loc_key(name) == wanted:
+                    state_id = (row or {}).get('state_id')
+                    break
+            if state_id is None:
+                # fallback contains matching
+                for row in state_data:
+                    name = str((row or {}).get('state_name') or '').strip()
+                    if not name:
+                        continue
+                    nk = _norm_loc_key(name)
+                    if nk and (nk in wanted or wanted in nk):
+                        state_id = (row or {}).get('state_id')
+                        break
+
+        if district_text and state_id is not None:
+            wanted_d = _norm_loc_key(district_text)
+            for row in district_data:
+                if (row or {}).get('state_id') != state_id:
+                    continue
+                name = str((row or {}).get('district_name') or '').strip()
+                if name and _norm_loc_key(name) == wanted_d:
+                    district_id = (row or {}).get('id')
+                    break
+            if district_id is None:
+                for row in district_data:
+                    if (row or {}).get('state_id') != state_id:
+                        continue
+                    name = str((row or {}).get('district_name') or '').strip()
+                    if not name:
+                        continue
+                    nk = _norm_loc_key(name)
+                    if nk and (nk in wanted_d or wanted_d in nk):
+                        district_id = (row or {}).get('id')
+                        break
+    except Exception:
+        state_id = None
+        district_id = None
+
+    def _try_weighted_daily_report(*, target_date_ymd: str) -> tuple[list, str | None]:
+        """Fetch new AGMARKNET SPA 'weighted' daily report and normalize to row format.
+
+        Returns (rows, error_or_None). On success, returns [] when upstream
+        responds successfully but contains no matching markets.
+        """
+        if not target_date_ymd:
+            return [], 'missing-date'
+
+        url = f"{AGMARKNET_V1_API_BASE}/prices-and-arrivals/commodity-market/daily-report-weighted"
+        headers = {
+            **HEADERS,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+        }
+
+        payload = {
+            'date': target_date_ymd,
+            'commodityIds': [int(cmdt_id)],
+        }
+
+        r = session_obj.post(url, json=payload, headers=headers, timeout=timeout_seconds)
+        if r.status_code != 200:
+            return [], f'weighted http {r.status_code}'
+
+        jd = r.json() if r.content else {}
+        if not isinstance(jd, dict) or not jd.get('success'):
+            # Treat non-success as an error to trigger fallback.
+            return [], 'weighted not-success'
+
+        state_data = filters.get('state_data') or []
+        district_data = filters.get('district_data') or []
+        market_data = filters.get('market_data') or []
+
+        state_id_by_norm = {}
+        state_name_by_id = {}
+        for row in state_data:
+            sid = (row or {}).get('state_id')
+            sname = str((row or {}).get('state_name') or '').strip()
+            if sid is None or not sname:
+                continue
+            state_name_by_id[sid] = sname
+            state_id_by_norm[_norm_loc_key(sname)] = sid
+
+        district_name_by_id = {}
+        for row in district_data:
+            did = (row or {}).get('id')
+            dname = str((row or {}).get('district_name') or '').strip()
+            if did is None or not dname:
+                continue
+            district_name_by_id[did] = dname
+
+        market_meta_by_key = {}
+        market_meta_by_name = {}
+        duplicates = set()
+        for row in market_data:
+            mname = str((row or {}).get('mkt_name') or '').strip()
+            sid = (row or {}).get('state_id')
+            if not mname or sid is None:
+                continue
+            key = (sid, _norm_loc_key(mname))
+            market_meta_by_key[key] = row
+            nm = _norm_loc_key(mname)
+            if nm in market_meta_by_name:
+                duplicates.add(nm)
+            else:
+                market_meta_by_name[nm] = row
+        for nm in duplicates:
+            market_meta_by_name.pop(nm, None)
+
+        def _convert_weighted_row(*, state_name: str, market_name: str, district_name: str | None, rec: dict) -> dict:
+            unit_raw = rec.get('unitOfPrice') or 'Rs./Quintal'
+            base_unit = _normalize_unit_text(unit_raw)
+            min_price = _coerce_market_numeric(rec.get('minPrice'))
+            max_price = _coerce_market_numeric(rec.get('maxPrice'))
+            modal_price = _coerce_market_numeric(rec.get('modalPrice'))
+            row = {
+                'market': market_name or '',
+                'district': district_name or '',
+                'state': state_name or '',
+                'variety': rec.get('variety') or None,
+                'grade': rec.get('grade') or None,
+                'min_price': min_price,
+                'max_price': max_price,
+                'modal_price': modal_price,
+                'arrival_date': target_date_ymd,
+                'price_unit_raw': unit_raw,
+                'price_unit_base': base_unit,
+                'price_unit': 'INR/kg',
+                'commodity': commodity_text,
+            }
+            row['min_price_per_kg'] = _to_inr_per_kg(row.get('min_price'), base_unit)
+            row['max_price_per_kg'] = _to_inr_per_kg(row.get('max_price'), base_unit)
+            row['modal_price_per_kg'] = _to_inr_per_kg(row.get('modal_price'), base_unit)
+            return row
+
+        out = []
+        commodities_block = jd.get('commodities') or []
+        for cg in (commodities_block if isinstance(commodities_block, list) else []):
+            for item in ((cg or {}).get('items') or []):
+                for st in ((item or {}).get('states') or []):
+                    state_name = str((st or {}).get('state') or '').strip()
+                    if not state_name:
+                        continue
+                    if desired_state_norm and _norm_loc_key(state_name) != desired_state_norm:
+                        continue
+
+                    sid = state_id_by_norm.get(_norm_loc_key(state_name))
+                    for mk in ((st or {}).get('markets') or []):
+                        market_name = str((mk or {}).get('market_name') or '').strip()
+                        if not market_name:
+                            continue
+
+                        district_name = None
+                        meta = None
+                        if sid is not None:
+                            meta = market_meta_by_key.get((sid, _norm_loc_key(market_name)))
+                        if meta is None:
+                            meta = market_meta_by_name.get(_norm_loc_key(market_name))
+                        if isinstance(meta, dict):
+                            did = meta.get('district_id')
+                            district_name = district_name_by_id.get(did)
+
+                        if desired_district_norm and _norm_loc_key(district_name or '') != desired_district_norm:
+                            continue
+
+                        for rec in ((mk or {}).get('data') or []):
+                            if not isinstance(rec, dict):
+                                continue
+                            out.append(_convert_weighted_row(
+                                state_name=state_name,
+                                market_name=market_name,
+                                district_name=district_name,
+                                rec=rec,
+                            ))
+
+        return out, None
+
+    # Prefer the newer SPA endpoint for single-day lookups (the Market page uses a date picker).
+    try:
+        from_d = _parse_ymd_date(from_date)
+        to_d = _parse_ymd_date(to_date)
+        single_day = False
+        target_date = None
+        if from_d and to_d:
+            single_day = from_d == to_d
+            target_date = to_d
+        elif to_d:
+            single_day = True
+            target_date = to_d
+        elif from_d:
+            single_day = True
+            target_date = from_d
+        else:
+            # Blank date: default to today's India date.
+            single_day = True
+            target_date = _today_india_date()
+
+        if single_day and target_date is not None:
+            weighted_rows, weighted_err = _try_weighted_daily_report(target_date_ymd=target_date.isoformat())
+            if weighted_err is None and weighted_rows:
+                return weighted_rows, None
+    except Exception as e:
+        # Fall back to legacy report query.
+        last_err = f'weighted-error:{str(e)[:120]}'
+
+    # Decide date range.
+    user_supplied_dates = bool(str(from_date or '').strip() or str(to_date or '').strip())
+
+    from_raw = _ymd_to_agmarknet_date(from_date) if from_date else None
+    to_raw = _ymd_to_agmarknet_date(to_date) if to_date else None
+
+    # Alternate conversion (DD-MM-YYYY) to handle API inconsistencies.
+    from_alt = None
+    to_alt = None
+    try:
+        if from_date:
+            parsed_from = _parse_ymd_date(from_date)
+            from_alt = parsed_from.strftime('%d-%m-%Y') if parsed_from is not None else None
+        if to_date:
+            parsed_to = _parse_ymd_date(to_date)
+            to_alt = parsed_to.strftime('%d-%m-%Y') if parsed_to is not None else None
+    except Exception:
+        from_alt = None
+        to_alt = None
+    # When user leaves date blank, prefer today's date (expected UX on Market page),
+    # then fallback to upstream live_date if needed.
+    if not user_supplied_dates:
+        try:
+            today_str = _today_india_date().strftime('%d-%m-%Y')
+        except Exception:
+            today_str = None
+        if not from_raw:
+            from_raw = today_str
+        if not to_raw:
+            to_raw = today_str
+
+    if not to_raw:
+        # live_date is a raw dd-mm-yyyy string for report.
+        try:
+            to_raw = get_live_date_raw_fast()
+        except Exception:
+            to_raw = None
+    if not to_raw and from_raw:
+        # If from_date is available but live_date is unavailable, still fetch that day.
+        to_raw = from_raw
+    if not to_raw:
+        # Final fallback: try today's India date.
+        try:
+            to_raw = _today_india_date().strftime('%d-%m-%Y')
+        except Exception:
+            to_raw = None
+    if not to_raw:
+        return [], 'live-date-missing'
+    if not from_raw:
+        from_raw = to_raw
+
+    url = f"{AGMARKNET_V1_API_BASE}/daily-price-arrival/report"
+    page_size = _report_page_size()
+
+    def _fmt_bracket_list(values) -> str:
+        # The official AGMARKNET SPA sends array params like: state=[33]
+        # Keep this as a string so requests does not percent-encode brackets.
+        vals = []
+        for v in (values or []):
+            if v is None:
+                continue
+            s = str(v).strip()
+            if not s:
+                continue
+            vals.append(s)
+        return f"[{','.join(vals)}]"
+
+    # Base params. The AGMARKNET SPA frequently uses bracket-array params even
+    # when only one value is selected; we mirror that for compatibility.
+    base_params_spa = {
+        'group': _fmt_bracket_list([int(group_id)]),
+        'commodity': _fmt_bracket_list([int(cmdt_id)]),
+        'limit': int(page_size),
+        'page': 1,
+        'format': 'json',
+    }
+
+    # Fallback: some upstream paths accept scalar ids.
+    base_params_legacy = {
+        'group': int(group_id),
+        'commodity': int(cmdt_id),
+        'limit': int(page_size),
+        'page': 1,
+        'format': 'json',
+    }
+
+    def _convert_record(rec: dict) -> dict:
+        unit_raw = rec.get('unit_name_price') or 'Rs./Quintal'
+        base_unit = _normalize_unit_text(unit_raw)
+        min_price = _coerce_market_numeric(rec.get('min_price'))
+        max_price = _coerce_market_numeric(rec.get('max_price'))
+        modal_price = _coerce_market_numeric(rec.get('model_price'))
+        row = {
+            'market': rec.get('market_name') or '',
+            'district': rec.get('district_name') or '',
+            'state': rec.get('state_name') or '',
+            'variety': rec.get('variety_name') or None,
+            'grade': rec.get('grade_name') or None,
+            'min_price': min_price,
+            'max_price': max_price,
+            'modal_price': modal_price,
+            'arrival_date': rec.get('arrival_date') or to_raw,
+            'price_unit_raw': unit_raw,
+            'price_unit_base': base_unit,
+            'price_unit': 'INR/kg',
+            'commodity': commodity_text,
+        }
+        row['min_price_per_kg'] = _to_inr_per_kg(row.get('min_price'), base_unit)
+        row['max_price_per_kg'] = _to_inr_per_kg(row.get('max_price'), base_unit)
+        row['modal_price_per_kg'] = _to_inr_per_kg(row.get('modal_price'), base_unit)
+        return row
+
+    date_candidates = [(from_raw, to_raw)]
+    if user_supplied_dates:
+        alt_from_raw = from_alt or from_raw
+        alt_to_raw = to_alt or to_raw
+        if alt_from_raw and alt_to_raw and (alt_from_raw, alt_to_raw) != (from_raw, to_raw):
+            date_candidates.append((alt_from_raw, alt_to_raw))
+    else:
+        # Blank date search: try live_date as fallback if today's date returns nothing.
+        try:
+            live_raw = get_live_date_raw_fast()
+        except Exception:
+            live_raw = None
+        if live_raw and (live_raw, live_raw) not in date_candidates:
+            date_candidates.append((live_raw, live_raw))
+
+    last_err = None
+    for from_cand, to_cand in date_candidates:
+        # Try a few query shapes. The AGMARKNET SPA typically sends
+        # state/district/market as bracket-array params (e.g. state=[33]).
+        # We try that first (when user supplies filters), then broaden.
+
+        query_variants = []
+
+        # 1) If user supplied state/district and we could resolve IDs, send them upstream.
+        if state_id is not None:
+            v = {
+                'state': _fmt_bracket_list([state_id]),
+                'district': _fmt_bracket_list([district_id]) if district_id is not None else _fmt_bracket_list([AG_ALL_DISTRICTS_ID]),
+                'market': _fmt_bracket_list([AG_ALL_MARKETS_ID]),
+            }
+            query_variants.append(v)
+
+        # 2) Broad query across India (SPA-style sentinels).
+        query_variants.append({
+            'state': _fmt_bracket_list([AG_ALL_STATES_ID]),
+            'district': _fmt_bracket_list([AG_ALL_DISTRICTS_ID]),
+            'market': _fmt_bracket_list([AG_ALL_MARKETS_ID]),
+        })
+
+        # 3) Legacy: no upstream location params.
+        query_variants.append({})
+
+        for variant in query_variants:
+            for base_params in (base_params_spa, base_params_legacy):
+                params = dict(base_params)
+                params.update(variant)
+                params['from_date'] = from_cand
+                params['to_date'] = to_cand
+
+                rows_out = []
+                saw_any_page_rows = False
+                max_pages = _report_max_pages()
+                for page in range(1, max_pages + 1):
+                    params['page'] = page
+                    try:
+                        r = session_obj.get(url, params=params, headers=HEADERS, timeout=timeout_seconds)
+                        if r.status_code != 200:
+                            # If this variant fails (e.g. 404), try next query shape.
+                            if r.status_code in (400, 404):
+                                last_err = f'http-{r.status_code}'
+                                break
+                            return rows_out, f'http-{r.status_code}'
+                        jd = r.json() if r.content else {}
+                    except Exception as e:
+                        return rows_out, f'request-error:{str(e)[:120]}'
+
+                    if not jd.get('status'):
+                        if rows_out:
+                            return rows_out, None
+                        last_err = 'status-false'
+                        break
+
+                    page_rows = _extract_report_rows(jd)
+                    if not page_rows:
+                        break
+
+                    saw_any_page_rows = True
+
+                    for rec in page_rows:
+                        if not isinstance(rec, dict):
+                            continue
+
+                        # Local filter to match user's selection (robust even if upstream ignores filters).
+                        if desired_state_norm and _norm_loc_key(rec.get('state_name')) != desired_state_norm:
+                            continue
+                        if desired_district_norm and _norm_loc_key(rec.get('district_name')) != desired_district_norm:
+                            continue
+
+                        rows_out.append(_convert_record(rec))
+
+                    # Prefer API pagination metadata when present (prevents truncation).
+                    total_pages = _extract_report_total_pages(jd)
+                    if total_pages is not None:
+                        if page >= total_pages:
+                            break
+                    else:
+                        # Fallback when pagination metadata isn't provided.
+                        if len(page_rows) < int(params.get('limit') or page_size):
+                            break
+
+                if rows_out:
+                    return rows_out, None
+
+                # Upstream returned data for this query, but nothing matched user's
+                # local filters (state/district). That is a successful live fetch.
+                if saw_any_page_rows and (state_key or district_key):
+                    return [], None
+
+    return [], last_err
 
 
 def _http_retry_count() -> int:
@@ -3685,7 +4629,7 @@ def _persist_mandi_price_history(commodity, records, source, scraped_at):
         'total': 0,
     }
 
-    if mongo_db is None:
+    if mongo_db is None or not _mandi_price_db_enabled():
         return summary
 
     latest_coll = mongo_db.get_collection(MANDI_PRICE_LATEST_COLLECTION)
@@ -4252,9 +5196,10 @@ def update_prices_for_commodity(commodity, force=False, return_summary=False):
                 return {'cache': cache, 'sync_summary': sync_summary}
             return cache
 
+    # Do not persist mandi prices anywhere (no file / no DB).
+    # Keep the computed cache object in-memory only for this request.
     cache["last_updated"] = now
     cache["last_scraped_at"] = now
-    save_cache(cache)
     try:
         print(
             "Mandi sync summary",
@@ -5166,53 +6111,76 @@ def price():
         return jsonify({"success": False, "msg": "Commodity required"}), 400
 
     ai_requested = str(request.args.get('ai') or '').lower() in ('1', 'true', 'yes')
-    strict_refresh = str(request.args.get('strict') or '').lower() in ('1', 'true', 'yes')
     strict_match = str(request.args.get('exact') or '').lower() in ('1', 'true', 'yes')
     focus_state = request.args.get('state')
     focus_district = request.args.get('district')
     focus_market = request.args.get('market')
+    from_date = request.args.get('from_date')
+    to_date = request.args.get('to_date')
+    lat = _coerce_float(request.args.get('lat'))
+    lon = _coerce_float(request.args.get('lon'))
 
-    cache = load_cache()
-    if strict_match:
-        commodity_match = _build_exact_commodity_match(base_commodity)
-    else:
-        commodity_match = resolve_commodity_name(base_commodity, cache=cache)
+    # Pure live fetch: do not depend on stored cache for commodity matching.
+    commodity_match = _build_exact_commodity_match(base_commodity)
     resolved_commodity = commodity_match.get('resolved') or base_commodity
     resolved_key = commodity_match.get('resolved_key') or norm(base_commodity)
 
     if not resolved_key:
         return jsonify({"success": False, "msg": "Invalid commodity"}), 400
 
-    data = cache.get("commodities", {}).get(resolved_key, {})
-    refresh_triggered = False
-    refresh_reason = 'fresh'
-    pre_refresh_latest_date = None
+    live_fetch_failed = False
+    now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
 
-    # Non-blocking freshness flow:
-    # - read DB/cache latest trading date
-    # - probe upstream latest date
-    # - if upstream is newer, start background scrape and return current DB/cache data
-    items_pre = _enrich_market_price_items((data or {}).get('items', []))
-    db_latest_trading_date = _latest_price_date_from_items(items_pre)
+    # 1) Always try live government fetch first (fast timeout).
+    #    Important: A live fetch can be successful but still return 0 rows
+    #    after applying user filters; that is NOT a failure.
+    live_rows = []
+    live_err = None
+    try:
+        live_rows, live_err = fetch_from_agmarknet_api(
+            resolved_commodity,
+            from_date=from_date,
+            to_date=to_date,
+            state=focus_state,
+            district=focus_district,
+            timeout_seconds=12,
+        )
+    except Exception as e:
+        live_rows, live_err = [], str(e)[:120]
 
-    source_latest_date = probe_latest_source_date(resolved_commodity)
-    new_data_available = bool(source_latest_date and (db_latest_trading_date is None or source_latest_date > db_latest_trading_date))
-    if strict_refresh:
-        new_data_available = True
+    if live_err is None:
+        # Do NOT persist mandi prices anywhere; fetch and return only.
+        items = _enrich_market_price_items(live_rows)
+        data = {
+            'fetched_at': now_iso,
+            'last_scraped_at': now_iso,
+            'items': items,
+            'source': 'agmarknet',
+        }
+    else:
+        # No cache fallback when persistence is disabled.
+        live_fetch_failed = True
+        items = []
+        data = {
+            'fetched_at': None,
+            'last_scraped_at': None,
+            'items': [],
+            'source': None,
+        }
 
-    scrape_started = False
-    if new_data_available:
-        scrape_started = _try_start_background_price_scrape(resolved_commodity)
-        refresh_triggered = scrape_started
-        if strict_refresh:
-            refresh_reason = 'strict' if scrape_started else 'scrape-already-running'
-        else:
-            refresh_reason = 'source-newer' if scrape_started else 'scrape-already-running'
+    # Apply filters for live-fetch path as well (state/district/date), in case upstream
+    # returns broader results than requested.
+    items = _apply_mandi_filters(items, from_date=from_date, to_date=to_date, state=focus_state, district=focus_district)
 
-    # Re-read final resolved key (still non-blocking), so response uses persisted state.
-    cache = load_cache()
-    data = cache.get("commodities", {}).get(resolved_key, data if isinstance(data, dict) else {})
-    items = _enrich_market_price_items(data.get("items", []))
+    # Optional distance prioritization when market coordinates exist in rows.
+    if lat is not None and lon is not None:
+        def row_distance(row):
+            d = _haversine_km(lat, lon, row.get('lat'), row.get('lon'))
+            return d if d is not None else 1e12
+        try:
+            items = sorted(items, key=row_distance)
+        except Exception:
+            pass
     variety_not_found = False
     if variety_filter:
         filtered_items = _filter_mandi_items_by_variety(items, variety_filter)
@@ -5232,7 +6200,7 @@ def price():
     top_price = price_meta.get('latest_price')
     top_market = latest_item.get('market') if isinstance(latest_item, dict) else None
     top_state = latest_item.get('state') if isinstance(latest_item, dict) else None
-    last_updated = price_meta.get('fetched_at') or cache.get('last_updated')
+    last_updated = price_meta.get('fetched_at')
 
     resp = {
         "success": True,
@@ -5258,12 +6226,12 @@ def price():
             "match_type": commodity_match.get('match_type') or 'exact',
         },
         "variety_not_found": variety_not_found,
-        "refresh_triggered": refresh_triggered,
-        "refresh_reason": refresh_reason,
-        "new_data_available": new_data_available,
-        "scrape_started": scrape_started,
+        "live_fetch_failed": live_fetch_failed,
+        "live_fetch_error": (live_err if live_fetch_failed else None),
+        "new_data_available": False,
+        "scrape_started": False,
         "market_not_updated_today": market_not_updated_today,
-        "last_trading_date": latest_trading_date.isoformat() if latest_trading_date is not None else pre_refresh_latest_date,
+        "last_trading_date": latest_trading_date.isoformat() if latest_trading_date is not None else None,
     }
     if ai_requested:
         resp['ai'] = gemini_live_price_summary(
