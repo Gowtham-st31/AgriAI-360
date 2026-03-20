@@ -1945,6 +1945,18 @@ def auth_google():
     if not token_info.get('email_verified'):
         return {'success': False, 'message': 'Google account email is not verified'}, 400
 
+    # IMPORTANT: For sign-in (mode=login), do NOT auto-create accounts.
+    # If the user is new, force them to use the Sign Up flow.
+    if mode == 'login':
+        existing_user = find_user(email) or find_user_by_google_sub(google_sub)
+        if not existing_user:
+            return {
+                'success': False,
+                'message': 'No account found for this Google email. Please sign up first.',
+            }, 404
+        # Use the stored email as the canonical session user.
+        email = (existing_user.get('email') or email).strip().lower()
+
     if mode == 'signup':
         existing_user = find_user(email) or find_user_by_google_sub(google_sub)
         if existing_user:
