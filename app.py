@@ -341,38 +341,83 @@ def _gemini_fill_text_only_disease_info(
         return None
 
 # ------------------
-# MongoDB (Atlas) init
+# MongoDB (Atlas) init (LAZY)
 # ------------------
 mongo_client = None
 mongo_db = None
 MONGODB_URI = os.environ.get('MONGODB_URI')
-if MONGODB_URI and MongoClient is not None:
+
+_mongo_init_lock = threading.Lock()
+_mongo_init_attempted = False
+
+
+def _mongo_dbname_from_uri(uri: str) -> str | None:
     try:
-        # Use short timeouts so the app doesn't hang on startup/deploy if Mongo is unreachable.
-        mongo_client = MongoClient(
-            MONGODB_URI,
-            serverSelectionTimeoutMS=int(os.environ.get('MONGODB_SERVER_SELECTION_TIMEOUT_MS', '2000')),
-            connectTimeoutMS=int(os.environ.get('MONGODB_CONNECT_TIMEOUT_MS', '2000')),
-            socketTimeoutMS=int(os.environ.get('MONGODB_SOCKET_TIMEOUT_MS', '2000')),
-        )
-        # Determine DB name: prefer explicit env var, else driver default, else 'agri'
-        mongo_dbname = os.environ.get('MONGODB_DB')
-        if not mongo_dbname:
-            try:
-                mongo_dbname = mongo_client.get_default_database().name
-            except Exception:
-                mongo_dbname = None
-        if not mongo_dbname:
-            mongo_dbname = 'agri'
-        mongo_db = mongo_client[mongo_dbname]
-        print(f"MongoDB connected, using database: {mongo_db.name}")
-    except Exception as e:
-        print('MongoDB init failed:', e)
-        mongo_client = None
-        mongo_db = None
-else:
-    if MONGODB_URI and MongoClient is None:
+        u = (uri or '').strip()
+        if not u:
+            return None
+        # mongodb://.../<db>?...
+        if '://' in u:
+            u = u.split('://', 1)[1]
+        if '/' not in u:
+            return None
+        path = u.split('/', 1)[1]
+        dbname = path.split('?', 1)[0].strip()
+        return dbname if dbname else None
+    except Exception:
+        return None
+
+
+def _get_mongo_db():
+    """Initialize MongoDB connection on-demand.
+
+    Render deployments can time out if DNS/Atlas is slow or unreachable during
+    module import. Keeping Mongo init lazy allows the web server to start and
+    serve health checks quickly.
+    """
+    global mongo_client, mongo_db, _mongo_init_attempted
+
+    if mongo_db is not None:
+        return mongo_db
+
+    # If we've already tried and failed, don't keep retrying on every request.
+    if _mongo_init_attempted:
+        return None
+
+    if not MONGODB_URI:
+        _mongo_init_attempted = True
+        return None
+
+    if MongoClient is None:
+        _mongo_init_attempted = True
         print('MONGODB_URI provided but pymongo not installed; install pymongo in requirements')
+        return None
+
+    with _mongo_init_lock:
+        if mongo_db is not None:
+            return mongo_db
+        if _mongo_init_attempted:
+            return None
+        _mongo_init_attempted = True
+
+        try:
+            # Use short timeouts so requests fail fast when Mongo is unreachable.
+            client = MongoClient(
+                MONGODB_URI,
+                serverSelectionTimeoutMS=int(os.environ.get('MONGODB_SERVER_SELECTION_TIMEOUT_MS', '2000')),
+                connectTimeoutMS=int(os.environ.get('MONGODB_CONNECT_TIMEOUT_MS', '2000')),
+                socketTimeoutMS=int(os.environ.get('MONGODB_SOCKET_TIMEOUT_MS', '2000')),
+            )
+            dbname = (os.environ.get('MONGODB_DB') or '').strip() or _mongo_dbname_from_uri(MONGODB_URI) or 'agri'
+            mongo_client = client
+            mongo_db = client[dbname]
+            print(f"MongoDB configured for database: {dbname}")
+            return mongo_db
+        except Exception as e:
+            print('MongoDB init failed:', e)
+            mongo_client = None
+            mongo_db = None
+            return None
 
 PRICE_COLLECTION = 'prices'
 PRICE_META_DOC_ID = '__meta__'
@@ -395,10 +440,11 @@ def _mandi_price_db_enabled() -> bool:
 
 
 def _ensure_price_indexes():
-    if mongo_db is None or not _mandi_price_db_enabled():
+    mdb = _get_mongo_db()
+    if mdb is None or not _mandi_price_db_enabled():
         return
     try:
-        coll = mongo_db.get_collection(PRICE_COLLECTION)
+        coll = mdb.get_collection(PRICE_COLLECTION)
         coll.create_index('key', unique=True, sparse=True)
         coll.create_index('fetched_at')
         coll.create_index('last_scraped_at')
@@ -407,8 +453,8 @@ def _ensure_price_indexes():
         print('ensure price indexes error:', e)
 
     try:
-        latest_coll = mongo_db.get_collection(MANDI_PRICE_LATEST_COLLECTION)
-        history_coll = mongo_db.get_collection(MANDI_PRICE_HISTORY_COLLECTION)
+        latest_coll = mdb.get_collection(MANDI_PRICE_LATEST_COLLECTION)
+        history_coll = mdb.get_collection(MANDI_PRICE_HISTORY_COLLECTION)
 
         latest_coll.create_index('natural_key', unique=True)
         latest_coll.create_index('state')
@@ -425,8 +471,6 @@ def _ensure_price_indexes():
     except Exception as e:
         print('ensure mandi history indexes error:', e)
 
-
-_ensure_price_indexes()
 
 # -----------------------------------------------------
 #   DISEASE CLASS LIST (38 CLASSES)
@@ -757,8 +801,9 @@ DEFAULT_INFO = {
 def load_users():
     # If Mongo is available, read users from the users collection
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('users')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('users')
             docs = list(coll.find({}, {'_id': 0}))
             return {'users': docs}
     except Exception:
@@ -771,8 +816,9 @@ def load_users():
 def save_users(data):
     # If Mongo is available, replace the users collection contents
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('users')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('users')
             coll.delete_many({})
             if data.get('users'):
                 # strip any _id if present
@@ -849,8 +895,9 @@ def update_user_record(email: str, updater):
 def find_user(email: str):
     # Prefer Mongo lookup when available
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('users')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('users')
             doc = coll.find_one({'email': email}, {'_id': 0})
             if doc:
                 return doc
@@ -870,8 +917,9 @@ def find_user_by_google_sub(google_sub: str):
         return None
 
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('users')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('users')
             doc = coll.find_one({'google_sub': sub}, {'_id': 0})
             if doc:
                 return doc
@@ -939,11 +987,13 @@ def upsert_google_user(email: str, google_claims: dict | None = None):
 # Orders / persistence helpers
 # -------------------------
 def get_orders_collection():
-    return mongo_db.get_collection('orders') if mongo_db is not None else None
+    mdb = _get_mongo_db()
+    return mdb.get_collection('orders') if mdb is not None else None
 
 
 def get_today_deals_collection():
-    return mongo_db.get_collection('today_deals') if mongo_db is not None else None
+    mdb = _get_mongo_db()
+    return mdb.get_collection('today_deals') if mdb is not None else None
 
 
 def _normalize_icon_path(icon_value):
@@ -1151,8 +1201,9 @@ def adjust_product_quantity(product_name, amount):
 
     # Try Mongo first
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('products')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('products')
             # find by name case-insensitive
             doc = coll.find_one({ 'name': { '$regex': f'^{re.escape(pname)}$', '$options': 'i' } })
             if not doc:
@@ -2308,7 +2359,7 @@ def marketplace():
             try:
                 image_bytes = image_file.read() if image_file is not None else None
                 image_mime = (getattr(image_file, 'mimetype', None) or 'image/png').strip() or 'image/png'
-                if image_bytes and mongo_db is None:
+                if image_bytes and _get_mongo_db() is None:
                     slug = re.sub(r"\s+", "-", (product or 'market').strip().lower())
                     slug = slug.replace('/', '').replace('\\', '')
                     fname = f"{slug}.png"
@@ -2360,7 +2411,7 @@ def marketplace():
         if contact:
             listing['contact'] = contact
 
-        if image_bytes and mongo_db is not None:
+        if image_bytes and _get_mongo_db() is not None:
             listing['image_data'] = base64.b64encode(image_bytes).decode('ascii')
             listing['image_mime'] = image_mime or 'image/png'
             listing['icon'] = _listing_image_endpoint(new_id)
@@ -2918,8 +2969,10 @@ def load_cache():
     # Prefer Mongo-stored cache when available (if enabled)
     mongo_cache = None
     try:
-        if mongo_db is not None and _mandi_price_db_enabled():
-            coll = mongo_db.get_collection(PRICE_COLLECTION)
+        mdb = _get_mongo_db()
+        if mdb is not None and _mandi_price_db_enabled():
+            _ensure_price_indexes()
+            coll = mdb.get_collection(PRICE_COLLECTION)
             meta_doc = coll.find_one({'_id': PRICE_META_DOC_ID}, {'_id': 0}) or {}
             cache = {
                 'last_updated': meta_doc.get('last_updated'),
@@ -2958,8 +3011,10 @@ def load_cache():
 def save_cache(cache):
     # Prefer storing cache to Mongo when available (if enabled)
     try:
-        if mongo_db is not None and _mandi_price_db_enabled():
-            coll = mongo_db.get_collection(PRICE_COLLECTION)
+        mdb = _get_mongo_db()
+        if mdb is not None and _mandi_price_db_enabled():
+            _ensure_price_indexes()
+            coll = mdb.get_collection(PRICE_COLLECTION)
             commodities = (cache or {}).get('commodities') or {}
             now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
 
@@ -3229,9 +3284,11 @@ def _get_mandi_locations():
     states = set()
     districts_by_state = {}
 
-    if mongo_db is not None and _mandi_price_db_enabled():
+    mdb = _get_mongo_db()
+    if mdb is not None and _mandi_price_db_enabled():
         try:
-            coll = mongo_db.get_collection(MANDI_PRICE_LATEST_COLLECTION)
+            _ensure_price_indexes()
+            coll = mdb.get_collection(MANDI_PRICE_LATEST_COLLECTION)
             raw_states = coll.distinct('state')
             for s in raw_states:
                 ss = str(s or '').strip()
@@ -3414,7 +3471,8 @@ def _query_mandi_from_mongo(
     district: str = None,
     limit: int = 250,
 ):
-    if mongo_db is None or not _mandi_price_db_enabled():
+    mdb = _get_mongo_db()
+    if mdb is None or not _mandi_price_db_enabled():
         return None
 
     commodity_text = str(commodity or '').strip()
@@ -3426,7 +3484,8 @@ def _query_mandi_from_mongo(
 
     use_history = bool(from_d or to_d)
     coll_name = MANDI_PRICE_HISTORY_COLLECTION if use_history else MANDI_PRICE_LATEST_COLLECTION
-    coll = mongo_db.get_collection(coll_name)
+    _ensure_price_indexes()
+    coll = mdb.get_collection(coll_name)
 
     query = {
         'commodity': {'$regex': f"^{re.escape(commodity_text)}$", '$options': 'i'}
@@ -4707,11 +4766,13 @@ def _persist_mandi_price_history(commodity, records, source, scraped_at):
         'total': 0,
     }
 
-    if mongo_db is None or not _mandi_price_db_enabled():
+    mdb = _get_mongo_db()
+    if mdb is None or not _mandi_price_db_enabled():
         return summary
 
-    latest_coll = mongo_db.get_collection(MANDI_PRICE_LATEST_COLLECTION)
-    history_coll = mongo_db.get_collection(MANDI_PRICE_HISTORY_COLLECTION)
+    _ensure_price_indexes()
+    latest_coll = mdb.get_collection(MANDI_PRICE_LATEST_COLLECTION)
+    history_coll = mdb.get_collection(MANDI_PRICE_HISTORY_COLLECTION)
     now_iso = datetime.utcnow().replace(microsecond=0).isoformat() + 'Z'
 
     seen_history_keys = set()
@@ -6574,8 +6635,9 @@ def admin_api_products():
         return x
     # Prefer Mongo products collection when available
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('products')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('products')
             prods = list(coll.find({}, {'_id': 0}))
             if request.method == 'GET':
                 for product in prods:
@@ -6606,8 +6668,9 @@ def admin_api_products():
 def public_products():
     """Public endpoint returning available products for marketplace and buy/sell pages."""
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('products')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('products')
             prods = list(coll.find({'available': True}, {'_id': 0}))
             for product in prods:
                 if isinstance(product, dict):
@@ -6655,8 +6718,9 @@ def write_products(pdata, force=False):
         pass
 
     try:
-        if mongo_db is not None:
-            coll = mongo_db.get_collection('products')
+        mdb = _get_mongo_db()
+        if mdb is not None:
+            coll = mdb.get_collection('products')
             # Replace collection contents with provided list (clear then insert)
             coll.delete_many({})
             if pdata.get('products'):
