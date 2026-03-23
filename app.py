@@ -6798,7 +6798,7 @@ def model_status():
 # --------------------
 # Small in-memory cache to reduce provider rate-limits (per-process).
 _WEATHER_CACHE: dict[tuple[float, float], dict] = {}
-_WEATHER_CACHE_TTL_S = int(os.environ.get('WEATHER_CACHE_TTL_S', '60') or '60')
+_WEATHER_CACHE_TTL_S = int(os.environ.get('WEATHER_CACHE_TTL_S', '300') or '300')
 _WEATHER_CACHE_MAX = int(os.environ.get('WEATHER_CACHE_MAX', '128') or '128')
 
 

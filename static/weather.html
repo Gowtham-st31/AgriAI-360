@@ -104,6 +104,164 @@
 
   let __lastWeatherData=null;
   let __range='1w';
+  const __weatherClientCache = new Map();
+
+  function _openMeteoWeatherDesc(code){
+    const c = parseInt(code, 10);
+    const mapping = {
+      0:'Clear sky',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',
+      45:'Fog',48:'Depositing rime fog',51:'Light drizzle',53:'Moderate drizzle',55:'Dense drizzle',
+      61:'Slight rain',63:'Moderate rain',65:'Heavy rain',71:'Slight snow fall',73:'Moderate snow fall',75:'Heavy snow fall',
+      80:'Rain showers',81:'Heavy rain showers',82:'Violent rain showers',
+      95:'Thunderstorm',96:'Thunderstorm with hail',99:'Thunderstorm with heavy hail'
+    };
+    return mapping.hasOwnProperty(c) ? mapping[c] : ('Weather code '+c);
+  }
+
+  function _openMeteoToOneCallLike(om){
+    const daily=(om && om.daily) || {};
+    const hourly=(om && om.hourly) || {};
+
+    const times=(daily.time)||[];
+    const tmax=(daily.temperature_2m_max)||[];
+    const tmin=(daily.temperature_2m_min)||[];
+    const pop=(daily.precipitation_probability_max)||[];
+    const wind=(daily.windspeed_10m_max)||[];
+    const wcode=(daily.weathercode)||[];
+
+    const h_times=(hourly.time)||[];
+    const h_temp=(hourly.temperature_2m)||[];
+    const h_pop=(hourly.precipitation_probability)||[];
+    const h_wind=(hourly.windspeed_10m)||[];
+    const h_wcode=(hourly.weathercode)||[];
+
+    function toEpochSeconds(t){
+      try{
+        const ms=Date.parse(t);
+        if(isFinite(ms)) return Math.floor(ms/1000);
+      }catch(e){}
+      return null;
+    }
+
+    const out_hourly=[];
+    for(let i=0;i<Math.min(48,h_times.length);i++){
+      const dt=toEpochSeconds(h_times[i]);
+      const popPct=(i<h_pop.length)?h_pop[i]:null;
+      const popFrac=(popPct!=null && isFinite(popPct))? (Number(popPct)/100.0) : 0;
+      const code=(i<h_wcode.length)?h_wcode[i]:null;
+      out_hourly.push({
+        dt: dt,
+        temp: (i<h_temp.length)?h_temp[i]:null,
+        pop: popFrac,
+        wind_speed: (i<h_wind.length)?h_wind[i]:null,
+        weather: [{id:0, description:_openMeteoWeatherDesc(code)}],
+        weathercode: code,
+      });
+    }
+
+    const out_daily=[];
+    for(let i=0;i<Math.min(7,times.length);i++){
+      const dt=toEpochSeconds(times[i]);
+      const popPct=(i<pop.length)?pop[i]:null;
+      const popFrac=(popPct!=null && isFinite(popPct))? (Number(popPct)/100.0) : 0;
+      const code=(i<wcode.length)?wcode[i]:null;
+      out_daily.push({
+        dt: dt,
+        temp: {max:(i<tmax.length)?tmax[i]:null, min:(i<tmin.length)?tmin[i]:null},
+        pop: popFrac,
+        wind_speed: (i<wind.length)?wind[i]:null,
+        weather: [{id:0, description:_openMeteoWeatherDesc(code)}],
+        weathercode: code,
+      });
+    }
+
+    // Summary like backend
+    let summary='';
+    try{
+      const ds=out_daily.slice(0,3);
+      const highs=ds.map(d=>d && d.temp ? d.temp.max : null).filter(v=>v!=null);
+      const lows=ds.map(d=>d && d.temp ? d.temp.min : null).filter(v=>v!=null);
+      const pops=ds.map(d=>d && d.pop ? d.pop : 0);
+      const maxHigh=(highs.length?Math.max(...highs):null);
+      const minLow=(lows.length?Math.min(...lows):null);
+      const avgPop=pops.length?Math.round((pops.reduce((a,b)=>a+b,0)/pops.length)*100):0;
+      const parts=[];
+      if(maxHigh!=null && minLow!=null) parts.push(`Next 3 days temps ${minLow.toFixed(0)}°C–${maxHigh.toFixed(0)}°C`);
+      if(avgPop) parts.push(`Chance of precipitation ~${avgPop}%`);
+      summary=parts.join(' — ');
+    }catch(e){summary='';}
+
+    const payload={
+      provider:'open-meteo',
+      latitude: om && om.latitude,
+      longitude: om && om.longitude,
+      timezone: om && om.timezone,
+      current_weather: om && om.current_weather,
+      hourly: out_hourly,
+      daily: out_daily,
+    };
+    return {forecast: payload, summary: summary};
+  }
+
+  function _buildAdviceFromForecast(forecast){
+    const advice=[];
+    const daily=(forecast && forecast.daily) ? forecast.daily.slice(0,3) : [];
+    for(const day of daily){
+      const pop=day && day.pop ? day.pop : 0;
+      const temps=(day && day.temp) || {};
+      const tmax=temps.max;
+      const tmin=temps.min;
+      if(pop && pop>=0.5) advice.push('Rain likely — consider covering susceptible crops and postponing sprays.');
+      if(tmax!=null && tmax>=35) advice.push('High temperatures expected — increase irrigation and monitor for heat stress.');
+      if(tmin!=null && tmin<=3) advice.push('Low temperatures expected — protect young seedlings from frost.');
+      const wind=day && day.wind_speed ? day.wind_speed : 0;
+      if(wind && wind>=10) advice.push('Strong winds expected — secure structures and avoid spraying on high-wind days.');
+    }
+    // dedupe
+    const seen=new Set();
+    const out=[];
+    for(const a of advice){ if(!seen.has(a)){ seen.add(a); out.push(a);} }
+    return out.length?out:['No specific advice for the next days.'];
+  }
+
+  async function callWeatherDirectOpenMeteo(params){
+    const lat=Number(params && params.lat);
+    const lon=Number(params && params.lon);
+    if(!isFinite(lat) || !isFinite(lon)) return null;
+
+    // Cache per rounded location (2 decimals ~1km)
+    const key=(Math.round(lat*100)/100)+','+(Math.round(lon*100)/100);
+    const now=Date.now();
+    const cached=__weatherClientCache.get(key);
+    if(cached && (now-cached.ts) < 120000){
+      return cached.data;
+    }
+
+    const url='https://api.open-meteo.com/v1/forecast?'+new URLSearchParams({
+      latitude:String(lat),
+      longitude:String(lon),
+      current_weather:'true',
+      hourly:'temperature_2m,precipitation_probability,windspeed_10m,weathercode',
+      daily:'temperature_2m_max,temperature_2m_min,precipitation_probability_max,windspeed_10m_max,weathercode',
+      timezone:'auto',
+      forecast_days:'7',
+    }).toString();
+
+    const r=await fetch(url);
+    if(!r.ok){
+      const txt=await r.text().catch(()=> '');
+      throw new Error('Open-Meteo error (HTTP '+r.status+'): '+String(txt).slice(0,160));
+    }
+    const om=await r.json();
+    const transformed=_openMeteoToOneCallLike(om);
+    const out={
+      forecast: transformed.forecast,
+      advice: _buildAdviceFromForecast(transformed.forecast),
+    };
+    if(transformed.summary) out.summary=transformed.summary;
+    __weatherClientCache.set(key,{ts: now, data: out});
+    return out;
+  }
 
   function setRange(r){
     __range=r||'1w';
@@ -122,22 +280,30 @@
 
   async function callWeather(params){
     try{
-      const url='/api/weather?'+new URLSearchParams(params).toString();
       showStatus('Loading...');
-      const r=await fetch(url);
-      if(!r.ok){
-        const err=await r.json().catch(()=>({error:'unknown'}));
-        const extra=(err && (err.details||err.status_code||err.provider)) ? (' — '+(
-          (err.details ? String(err.details).slice(0,180) : '') ||
-          (err.status_code ? ('HTTP '+err.status_code) : '') ||
-          (err.provider ? String(err.provider) : '')
-        )) : '';
-        showStatus('Error: '+(err.error||r.statusText)+extra);
-        return null;
+      // Prefer direct Open-Meteo from the browser to avoid Render datacenter IP rate limits.
+      try{
+        const direct=await callWeatherDirectOpenMeteo(params);
+        showStatus('');
+        return direct;
+      }catch(e){
+        // Fallback to backend proxy if direct call fails (network/CORS/etc).
+        const url='/api/weather?'+new URLSearchParams(params).toString();
+        const r=await fetch(url);
+        if(!r.ok){
+          const err=await r.json().catch(()=>({error:'unknown'}));
+          const extra=(err && (err.details||err.status_code||err.provider)) ? (' — '+(
+            (err.details ? String(err.details).slice(0,180) : '') ||
+            (err.status_code ? ('HTTP '+err.status_code) : '') ||
+            (err.provider ? String(err.provider) : '')
+          )) : '';
+          showStatus('Error: '+(err.error||r.statusText)+extra);
+          return null;
+        }
+        const jd=await r.json();
+        showStatus('');
+        return jd;
       }
-      const jd=await r.json();
-      showStatus('');
-      return jd;
     }catch(e){showStatus('Could not fetch weather: '+e);return null}
   }
 
