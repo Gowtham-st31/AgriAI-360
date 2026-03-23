@@ -18,7 +18,7 @@ import ssl
 import threading
 import base64
 from datetime import datetime, timedelta, timezone
-from flask import Flask, request, jsonify, send_from_directory, session, redirect, make_response, has_request_context
+from flask import Flask, request, jsonify, send_from_directory, session, redirect, make_response, has_request_context, Response
 from flask_cors import CORS
 from functools import wraps  # 🔥 FIXED
 import socket                # 🔥 moved here
@@ -7620,6 +7620,40 @@ def about_page():
 @app.route("/contact")
 def contact_page():
     return send_from_directory("static", "contact.html")
+
+
+# -----------------------------------------------------
+#   SEO SUPPORT
+# -----------------------------------------------------
+@app.route('/sitemap.xml')
+def sitemap_xml():
+    urls = (
+        'https://agriai360-xgxg.onrender.com/',
+        'https://agriai360-xgxg.onrender.com/weather',
+        'https://agriai360-xgxg.onrender.com/market',
+        'https://agriai360-xgxg.onrender.com/disease',
+    )
+
+    parts = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    for u in urls:
+        parts.append(f'  <url><loc>{html.escape(u, quote=True)}</loc></url>')
+    parts.append('</urlset>')
+
+    body = '\n'.join(parts) + '\n'
+    return Response(body, mimetype='application/xml')
+
+
+@app.route('/robots.txt')
+def robots_txt():
+    body = (
+        'User-agent: *\n'
+        'Allow: /\n'
+        'Sitemap: https://agriai360-xgxg.onrender.com/sitemap.xml\n'
+    )
+    return Response(body, mimetype='text/plain')
 
 # -----------------------------------------------------
 #   STATIC FILES (icons & css)
