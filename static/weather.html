@@ -125,7 +125,16 @@
       const url='/api/weather?'+new URLSearchParams(params).toString();
       showStatus('Loading...');
       const r=await fetch(url);
-      if(!r.ok){const err=await r.json().catch(()=>({error:'unknown'}));showStatus('Error: '+(err.error||r.statusText));return null}
+      if(!r.ok){
+        const err=await r.json().catch(()=>({error:'unknown'}));
+        const extra=(err && (err.details||err.status_code||err.provider)) ? (' — '+(
+          (err.details ? String(err.details).slice(0,180) : '') ||
+          (err.status_code ? ('HTTP '+err.status_code) : '') ||
+          (err.provider ? String(err.provider) : '')
+        )) : '';
+        showStatus('Error: '+(err.error||r.statusText)+extra);
+        return null;
+      }
       const jd=await r.json();
       showStatus('');
       return jd;

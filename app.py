@@ -6732,6 +6732,49 @@ def model_status():
 # --------------------
 # Weather Advice Page + API proxy
 # --------------------
+# Small in-memory cache to reduce provider rate-limits (per-process).
+_WEATHER_CACHE: dict[tuple[float, float], dict] = {}
+_WEATHER_CACHE_TTL_S = int(os.environ.get('WEATHER_CACHE_TTL_S', '60') or '60')
+_WEATHER_CACHE_MAX = int(os.environ.get('WEATHER_CACHE_MAX', '128') or '128')
+
+
+def _weather_cache_key(lat: float, lon: float) -> tuple[float, float]:
+    # Round to reduce key explosion while preserving practical accuracy.
+    return (round(float(lat), 3), round(float(lon), 3))
+
+
+def _weather_cache_get(lat: float, lon: float) -> dict | None:
+    try:
+        if _WEATHER_CACHE_TTL_S <= 0:
+            return None
+        key = _weather_cache_key(lat, lon)
+        rec = _WEATHER_CACHE.get(key)
+        if not rec:
+            return None
+        if (time.time() - float(rec.get('ts', 0))) > _WEATHER_CACHE_TTL_S:
+            _WEATHER_CACHE.pop(key, None)
+            return None
+        payload = rec.get('payload')
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _weather_cache_set(lat: float, lon: float, payload: dict) -> None:
+    try:
+        if _WEATHER_CACHE_TTL_S <= 0:
+            return
+        # Best-effort pruning.
+        if len(_WEATHER_CACHE) >= _WEATHER_CACHE_MAX:
+            # Drop oldest entries.
+            items = sorted(_WEATHER_CACHE.items(), key=lambda kv: float((kv[1] or {}).get('ts', 0)))
+            for k, _ in items[: max(1, len(_WEATHER_CACHE) - _WEATHER_CACHE_MAX + 1)]:
+                _WEATHER_CACHE.pop(k, None)
+        _WEATHER_CACHE[_weather_cache_key(lat, lon)] = {'ts': time.time(), 'payload': payload}
+    except Exception:
+        return
+
+
 @app.route('/weather')
 def weather_page():
     """Serve the weather advice static page."""
@@ -6791,11 +6834,34 @@ def api_weather():
             'forecast_days': 7,
         }
         try:
-            r = requests.get(url, params=params, timeout=12)
+            headers = {
+                # Some providers rate-limit/deny requests with empty UA; also helps debugging.
+                'User-Agent': (os.environ.get('WEATHER_USER_AGENT') or 'agriAI360/1.0 (+render)').strip(),
+                'Accept': 'application/json',
+            }
+            r = requests.get(url, params=params, headers=headers, timeout=15)
         except Exception as e:
-            return None, {'error': 'Weather provider timeout', 'details': str(e)[:180]}
+            print('Open-Meteo request failed:', repr(e))
+            return None, {'error': 'Weather provider request failed', 'details': str(e)[:300]}
         if r.status_code != 200:
-            return None, {'error': 'Weather provider error', 'details': str(r.text or '')[:500]}
+            snippet = (r.text or '')
+            snippet = snippet[:800] if isinstance(snippet, str) else str(snippet)[:800]
+            print('Open-Meteo non-200:', r.status_code, 'body:', snippet)
+            # Include status in the `error` string because the frontend only shows `error`.
+            err = {
+                'error': f'Weather provider error (HTTP {r.status_code})',
+                'status_code': r.status_code,
+                'provider': 'open-meteo',
+                'details': snippet,
+            }
+            # If the provider returns JSON error, attempt to surface it.
+            try:
+                jerr = r.json()
+                if isinstance(jerr, dict):
+                    err['provider_error'] = jerr
+            except Exception:
+                pass
+            return None, err
 
         try:
             om = r.json() if r.content else {}
@@ -6892,9 +6958,14 @@ def api_weather():
         if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
             return jsonify({'error': 'Invalid lat/lon range.'}), 400
 
-        payload, err = _open_meteo_fetch_onecall_like(lat, lon)
-        if err:
-            return jsonify(err), 502
+        cached = _weather_cache_get(lat, lon)
+        if cached:
+            payload = cached
+        else:
+            payload, err = _open_meteo_fetch_onecall_like(lat, lon)
+            if err:
+                return jsonify(err), 502
+            _weather_cache_set(lat, lon, payload)
 
         # Build a short human-friendly summary for frontends.
         summary = ''
