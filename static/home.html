@@ -102,7 +102,7 @@
         ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
         #slidesContainer { display: flex; transition: transform 0.8s cubic-bezier(0.16, 1, 0.3, 1); }
-        #slidesContainer .slide { min-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 40px; padding: 56px; }
+        #slidesContainer .slide { min-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: clamp(18px, 3vw, 40px); padding: clamp(20px, 4vw, 56px); }
         .dot-btn { width: 6px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.2); border: 0; cursor: pointer; transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
         .dot-btn:hover { background: rgba(255, 255, 255, 0.5); transform: scale(1.5); }
         .dot-btn.active { background: #34d399; width: 32px; box-shadow: 0 0 12px rgba(52, 211, 153, 0.5); }
@@ -112,10 +112,10 @@
             backdrop-filter: blur(16px); 
             border: 1px solid rgba(255, 255, 255, 0.06); 
             border-radius: 20px; 
-            padding: 16px; 
+            padding: clamp(12px, 2.2vw, 16px); 
             display: flex; 
             flex-direction: column; 
-            gap: 16px; 
+            gap: 14px; 
             transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1); 
             position: relative;
             overflow: hidden;
@@ -154,9 +154,10 @@
         .product-card:hover img { transform: scale(1.1) rotate(1deg); }
         
         .product-info { display: flex; flex-direction: column; gap: 6px; z-index: 1; }
-        .product-title { font-weight: 600; font-size: 1.05rem; color: #F8FAFC; letter-spacing: -0.02em; }
-        .product-meta { font-size: 0.8rem; color: #64748B; display: flex; align-items: center; gap: 6px; font-weight: 500;}
-        .product-price { font-size: 1.25rem; font-weight: 700; color: #F8FAFC; margin-top: 2px; font-family: 'Inter', sans-serif;}
+        .product-title { font-weight: 600; font-size: clamp(0.98rem, 1.3vw, 1.05rem); color: #F8FAFC; letter-spacing: -0.02em; }
+        .product-meta { font-size: 0.8rem; color: #64748B; display: flex; align-items: center; gap: 6px; font-weight: 500; flex-wrap: wrap; row-gap: 6px; }
+        .product-meta > div { min-width: 0; }
+        .product-price { font-size: clamp(1.05rem, 1.9vw, 1.25rem); font-weight: 700; color: #F8FAFC; margin-top: 2px; font-family: 'Inter', sans-serif;}
         .product-price span { color: #10B981; font-size: 0.9em; margin-right: 2px;}
         
         .product-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: auto; z-index: 1; }
@@ -174,6 +175,7 @@
             box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); 
             display: flex; align-items: center; justify-content: center; gap: 8px;
             letter-spacing: 0.01em;
+            white-space: nowrap;
         }
         .btn-main:hover { 
             transform: translateY(-2px); 
@@ -192,6 +194,7 @@
             cursor: pointer; 
             transition: all 0.2s ease; 
             display: flex; align-items: center; justify-content: center; gap: 8px;
+            white-space: nowrap;
         }
         .btn:hover { 
             background: rgba(255, 255, 255, 0.12); 
@@ -252,6 +255,28 @@
             height: 1px;
             background: linear-gradient(90deg, rgba(255,255,255,0.05) 0%, transparent 100%);
             margin-left: 20px;
+        }
+
+        /* Mobile responsiveness (prevent overlaps + tighten spacing) */
+        @media (max-width: 640px) {
+            #slidesContainer .slide { padding: 22px 18px; }
+            .product-card { border-radius: 18px; }
+            .product-actions { grid-template-columns: 1fr; }
+            .btn-main, .btn { padding: 10px 14px; font-size: 0.82rem; }
+
+            /* Floating cart centered properly */
+            #floating-cart { left: 50% !important; right: auto !important; bottom: 18px !important; padding: 10px 16px !important; gap: 12px !important; }
+            #floating-cart-count { padding: 2px 10px !important; }
+
+            /* Language button moves away from content cards */
+            #home-lang-fab { right: 14px !important; top: auto !important; bottom: 90px !important; }
+            #home-lang-btn { padding: 10px 12px !important; }
+            #home-lang-btn span { display: none !important; }
+            #home-lang-menu { position: absolute !important; right: 0 !important; bottom: calc(100% + 10px) !important; transform-origin: bottom right !important; }
+        }
+
+        @media (max-width: 380px) {
+            .btn-label { display: none !important; }
         }
     </style>
 </head>
@@ -375,7 +400,7 @@
                     View all <i class="fa-solid fa-arrow-right-long transform group-hover:translate-x-1 transition-transform opacity-70"></i>
                 </a>
             </div>
-            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6" id="dealsGrid"></div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6" id="dealsGrid"></div>
         </section>
 
         <section class="relative animate-fade-in-up" style="animation-delay: 0.2s;">
@@ -391,7 +416,7 @@
                     Browse <i class="fa-solid fa-arrow-right-long transform group-hover:translate-x-1 transition-transform opacity-70"></i>
                 </a>
             </div>
-            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-6" id="recommendGrid"></div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6" id="recommendGrid"></div>
         </section>
 
     </main>
@@ -463,8 +488,8 @@ function renderItems(targetEl, items){
             infoWrap.appendChild(title); infoWrap.appendChild(meta); infoWrap.appendChild(price);
 
             const actions = document.createElement('div'); actions.className = 'product-actions';
-            const buyBtn = document.createElement('button'); buyBtn.className='btn-main'; buyBtn.innerHTML='<i class="fa-solid fa-plus"></i> Cart'; buyBtn.addEventListener('click', ()=>{ try{ window.addToCart(it) }catch(e){ window.location.href='/buy.html' } });
-            const contactBtn = document.createElement('button'); contactBtn.className='btn'; contactBtn.innerHTML='<i class="fa-regular fa-message"></i> Contact'; contactBtn.addEventListener('click', ()=>{ try{ window.contactSeller(it.seller, it) }catch(e){ window.location.href='/sell.html' } });
+            const buyBtn = document.createElement('button'); buyBtn.className='btn-main'; buyBtn.innerHTML='<i class="fa-solid fa-plus"></i><span class="btn-label">Cart</span>'; buyBtn.addEventListener('click', ()=>{ try{ window.addToCart(it) }catch(e){ window.location.href='/buy.html' } });
+            const contactBtn = document.createElement('button'); contactBtn.className='btn'; contactBtn.innerHTML='<i class="fa-regular fa-message"></i><span class="btn-label">Contact</span>'; contactBtn.addEventListener('click', ()=>{ try{ window.contactSeller(it.seller, it) }catch(e){ window.location.href='/sell.html' } });
             
             actions.appendChild(buyBtn); actions.appendChild(contactBtn);
             
@@ -526,7 +551,7 @@ loadGrid(document.getElementById('recommendGrid'));
 </script>
 
 <!-- Floating cart - Dynamic Island style -->
-<div id="floating-cart" class="dynamic-island" style="position:fixed; bottom:32px; right:50%; transform: translateX(50%); z-index:999; display:flex; gap:16px; align-items:center; cursor:pointer; padding:12px 24px;">
+<div id="floating-cart" class="dynamic-island" style="position:fixed; bottom:32px; left:50%; transform: translateX(-50%); z-index:999; display:flex; gap:16px; align-items:center; cursor:pointer; padding:12px 24px;">
     <div class="flex items-center gap-3">
         <i class="fa-solid fa-cart-shopping text-primary text-lg"></i>
         <span class="text-white font-semibold text-sm tracking-wide">Cart</span>
@@ -617,10 +642,10 @@ loadGrid(document.getElementById('recommendGrid'));
         window.addEventListener('scroll', () => {
             const currentScroll = window.pageYOffset;
             if (currentScroll > lastScroll && currentScroll > 200) {
-                floatCart.style.transform = 'translate(50%, 100px)';
+                floatCart.style.transform = 'translate(-50%, 100px)';
                 floatCart.style.opacity = '0';
             } else {
-                floatCart.style.transform = 'translate(50%, 0)';
+                floatCart.style.transform = 'translate(-50%, 0)';
                 floatCart.style.opacity = '1';
             }
             lastScroll = currentScroll;
