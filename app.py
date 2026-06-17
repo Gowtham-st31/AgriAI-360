@@ -5471,7 +5471,7 @@ def scrape_agmarknet(commodity):
 # -----------------------------------------------------
 def _gemini_config():
     api_key = (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
-    model = (os.environ.get('GEMINI_MODEL') or 'gemma-4-31b-it').strip()
+    model = 'gemma-4-31b-it'
     # Optional comma-separated fallback model names to try if the primary model fails.
     # Example: GEMINI_MODEL_FALLBACKS=gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-flash-8b
     fallbacks_raw = (os.environ.get('GEMINI_MODEL_FALLBACKS') or '').strip()
@@ -5993,11 +5993,7 @@ def _gemini_disease_model_name():
 
     Note: image-based prompts require a multimodal Gemini model.
     """
-    return (
-        os.environ.get('DISEASE_GEMINI_MODEL')
-        or os.environ.get('GEMINI_DISEASE_MODEL')
-        or 'gemini-3.1-flash-lite'
-    ).strip()
+    return 'gemini-3.1-flash-lite'
 
 
 def _gemini_disease_model_fallbacks():
