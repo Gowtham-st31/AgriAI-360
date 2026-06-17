@@ -5471,7 +5471,7 @@ def scrape_agmarknet(commodity):
 # -----------------------------------------------------
 def _gemini_config():
     api_key = (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
-    model = (os.environ.get('GEMINI_MODEL') or 'gemini-2.0-flash').strip()
+    model = (os.environ.get('GEMINI_MODEL') or 'gemma-4-31b-it').strip()
     # Optional comma-separated fallback model names to try if the primary model fails.
     # Example: GEMINI_MODEL_FALLBACKS=gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-flash-8b
     fallbacks_raw = (os.environ.get('GEMINI_MODEL_FALLBACKS') or '').strip()
@@ -5488,8 +5488,8 @@ def _gemini_config():
 def _normalize_gemini_model_name(model_name: str) -> str:
     """Normalize model names from API outputs.
 
-    The Models API returns names like 'models/gemma-3-4b-it'. The generateContent
-    endpoint expects just 'gemma-3-4b-it' in the URL path.
+    The Models API returns names like 'models/gemma-4-31b-it'. The generateContent
+    endpoint expects just 'gemma-4-31b-it' in the URL path.
     """
     s = (model_name or '').strip()
     if not s:
@@ -5627,7 +5627,7 @@ def _gemini_generate_content_request(
 
 
 def _gemini_market_model_name() -> str:
-    return 'gemma-3-4b-it'
+    return 'gemma-4-31b-it'
 
 
 def _gemini_market_model_fallbacks() -> list:
@@ -5814,17 +5814,18 @@ def _gemini_error_payload(r):
 
     hint = None
     lower_message = message.lower()
+    market_model = _gemini_market_model_name()
     if 'search as tool is not enabled' in lower_message:
         return (
-            'Live web search is not available for gemma-3-4b-it.',
+            f'Live web search is not available for {market_model}.',
             details,
-            'The market AI is pinned to gemma-3-4b-it, but this model cannot use the Google Search tool in the current API.'
+            f'The market AI is pinned to {market_model}, but this model cannot use the Google Search tool in the current API.'
         )
     if 'json mode is not enabled' in lower_message:
         return (
-            'Structured JSON mode is not available for gemma-3-4b-it.',
+            f'Structured JSON mode is not available for {market_model}.',
             details,
-            'This model must be called without JSON response mode. The market request has been adjusted to avoid that mode.'
+            f'This model must be called without JSON response mode. The market request has been adjusted to avoid that mode.'
         )
 
     if status == 429:
@@ -5995,7 +5996,7 @@ def _gemini_disease_model_name():
     return (
         os.environ.get('DISEASE_GEMINI_MODEL')
         or os.environ.get('GEMINI_DISEASE_MODEL')
-        or 'gemma-3-4b-it'
+        or 'gemini-3.1-flash-lite'
     ).strip()
 
 
