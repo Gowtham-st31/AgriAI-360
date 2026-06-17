@@ -5471,7 +5471,7 @@ def scrape_agmarknet(commodity):
 # -----------------------------------------------------
 def _gemini_config():
     api_key = (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
-    model = 'gemini-3.1-flash-lite'
+    model = 'gemma-4-31b-it'
     # Optional comma-separated fallback model names to try if the primary model fails.
     # Example: GEMINI_MODEL_FALLBACKS=gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-flash-8b
     fallbacks_raw = (os.environ.get('GEMINI_MODEL_FALLBACKS') or '').strip()
@@ -5488,8 +5488,8 @@ def _gemini_config():
 def _normalize_gemini_model_name(model_name: str) -> str:
     """Normalize model names from API outputs.
 
-    The Models API returns names like 'models/gemini-3.1-flash-lite'. The generateContent
-    endpoint expects just 'gemini-3.1-flash-lite' in the URL path.
+    The Models API returns names like 'models/gemma-4-31b-it'. The generateContent
+    endpoint expects just 'gemma-4-31b-it' in the URL path.
     """
     s = (model_name or '').strip()
     if not s:
@@ -5627,7 +5627,7 @@ def _gemini_generate_content_request(
 
 
 def _gemini_market_model_name() -> str:
-    return 'gemini-3.1-flash-lite'
+    return 'gemma-4-31b-it'
 
 
 def _gemini_market_model_fallbacks() -> list:
