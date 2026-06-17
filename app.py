@@ -5471,7 +5471,7 @@ def scrape_agmarknet(commodity):
 # -----------------------------------------------------
 def _gemini_config():
     api_key = (os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY') or '').strip()
-    model = 'gemma-4-31b-it'
+    model = 'gemini-3.1-flash-lite'
     # Optional comma-separated fallback model names to try if the primary model fails.
     # Example: GEMINI_MODEL_FALLBACKS=gemini-2.0-flash-lite,gemini-1.5-flash,gemini-1.5-flash-8b
     fallbacks_raw = (os.environ.get('GEMINI_MODEL_FALLBACKS') or '').strip()
@@ -5488,8 +5488,8 @@ def _gemini_config():
 def _normalize_gemini_model_name(model_name: str) -> str:
     """Normalize model names from API outputs.
 
-    The Models API returns names like 'models/gemma-4-31b-it'. The generateContent
-    endpoint expects just 'gemma-4-31b-it' in the URL path.
+    The Models API returns names like 'models/gemini-3.1-flash-lite'. The generateContent
+    endpoint expects just 'gemini-3.1-flash-lite' in the URL path.
     """
     s = (model_name or '').strip()
     if not s:
@@ -5627,7 +5627,7 @@ def _gemini_generate_content_request(
 
 
 def _gemini_market_model_name() -> str:
-    return 'gemma-4-31b-it'
+    return 'gemini-3.1-flash-lite'
 
 
 def _gemini_market_model_fallbacks() -> list:
@@ -5847,7 +5847,7 @@ def _gemini_error_payload(r):
     return message, details, hint
 
 
-def gemini_live_price_summary(commodity: str, items: list, state: str = None, district: str = None, market: str = None):
+def gemini_live_price_summary(commodity: str, items: list, state: str = None, district: str = None, market: str = None, response_lang: str = 'en'):
     """Use Gemini/Gemma to answer a commodity price query without tool grounding."""
     cfg = _gemini_config()
     if not cfg['api_key']:
@@ -5877,6 +5877,16 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
             'arrival_date': row.get('arrival_date'),
         })
 
+    lang_code = _normalize_lang_code(response_lang)
+    lang_names = {
+        'en': 'English',
+        'hi': 'Hindi',
+        'ta': 'Tamil',
+        'kn': 'Kannada',
+        'ml': 'Malayalam',
+    }
+    target_lang = lang_names.get(lang_code, 'English')
+
     prompt = (
         "You are an agriculture market analyst. "
         "The user searched for exactly one commodity price. "
@@ -5888,6 +5898,8 @@ def gemini_live_price_summary(commodity: str, items: list, state: str = None, di
         "commodity_corrected, recommended_modal_price, currency, unit, price_min, price_max, markets_count, as_of, rationale. "
         "recommended_modal_price must be a single number or null, never a string list. "
         "If you are uncertain, still return JSON and explain the uncertainty in rationale.\n"
+        f"Answer in {target_lang}. "
+        f"The rationale and commodity_corrected fields must be returned in {target_lang}.\n"
         f"User searched: {commodity}\n"
         f"Focus location: {focus}\n"
         f"Optional cached market rows for context: {json.dumps(sample_rows, ensure_ascii=False)}"
@@ -6515,12 +6527,14 @@ def price():
         "last_trading_date": latest_trading_date.isoformat() if latest_trading_date is not None else None,
     }
     if ai_requested:
+        lang_code = _requested_lang_code()
         resp['ai'] = gemini_live_price_summary(
             commodity=resolved_commodity,
             items=items,
             state=focus_state,
             district=focus_district,
-            market=focus_market
+            market=focus_market,
+            response_lang=lang_code
         )
     return jsonify(resp)
 

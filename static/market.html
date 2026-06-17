@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -173,6 +173,8 @@ async function getPrice() {
     const params = new URLSearchParams();
     params.set('commodity', c);
     params.set('ai', '1');
+    const lang = localStorage.getItem('agri_lang') || 'en';
+    params.set('lang', lang);
 
     const fromDate = (document.getElementById('from_date') || {}).value || '';
     const toDate = (document.getElementById('to_date') || {}).value || '';

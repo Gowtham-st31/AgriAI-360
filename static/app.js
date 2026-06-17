@@ -77,7 +77,7 @@ document.getElementById("checkPrice").onclick = async () => {
   const st = document.getElementById("state").value;
   const mk = document.getElementById("market").value;
 
-  const params = new URLSearchParams({ commodity: c, state: st, market: mk, ai: '1' });
+  const params = new URLSearchParams({ commodity: c, state: st, market: mk, ai: '1', lang: lang });
   const res = await fetch(`/price?${params}`);
   const data = await res.json();
 
