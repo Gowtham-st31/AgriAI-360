@@ -6350,6 +6350,81 @@ def disease_ask():
         }), 503
 
 
+@app.route('/api/translate', methods=['POST'])
+def api_translate():
+    """Batch translate dictionary of texts using Gemini 3.5 Live Translate."""
+    data = request.get_json(silent=True) or {}
+    texts = data.get('texts')
+    target_lang = (data.get('target_lang') or 'en').strip()
+
+    if not texts or not isinstance(texts, dict):
+        return jsonify({"success": False, "error": "Missing texts dictionary"}), 400
+
+    cfg = _gemini_config()
+    if not cfg['api_key']:
+        return jsonify({"success": False, "error": "API key not configured"}), 503
+
+    lang_names = {
+        'en': 'English',
+        'hi': 'Hindi',
+        'ta': 'Tamil',
+        'kn': 'Kannada',
+        'ml': 'Malayalam',
+    }
+    lang_name = lang_names.get(target_lang, 'English')
+
+    prompt = (
+        f"You are a translation assistant. Translate the following dictionary of English texts into {lang_name}.\n"
+        "Return ONLY a valid JSON dictionary mapping the exact same keys to the translated texts.\n"
+        "Do not include any extra text, code fences, markdown blocks, or explanations. Just return the JSON object.\n"
+        f"Dictionary to translate:\n{json.dumps(texts, ensure_ascii=False)}"
+    )
+
+    try:
+        payload = {
+            'contents': [
+                {'role': 'user', 'parts': [{'text': prompt}]}
+            ],
+            'generationConfig': {
+                'temperature': 0.1,
+                'maxOutputTokens': 4096
+            }
+        }
+        r, used_url, tried_urls = _gemini_generate_content_request(
+            api_base=cfg['api_base'],
+            api_key=cfg['api_key'],
+            model='gemini-3.5-live-translate-preview',
+            fallback_models=['gemini-3.5-flash', 'gemini-3.1-flash-lite'],
+            payload_primary=payload,
+            payload_secondary=payload,
+            timeout=30,
+        )
+
+        if isinstance(r, Exception):
+            return jsonify({"success": False, "error": str(r)}), 500
+        if r.status_code != 200:
+            return jsonify({"success": False, "error": f"API error: {r.status_code}", "details": r.text}), r.status_code
+
+        resp_data = r.json() if r.content else {}
+        text = ''
+        try:
+            candidate = (resp_data.get('candidates') or [])[0]
+            parts = (candidate.get('content') or {}).get('parts') or []
+            if parts and isinstance(parts[0], dict):
+                text = parts[0].get('text') or ''
+        except Exception:
+            pass
+
+        translated_dict = _extract_json_from_text(text)
+        if not isinstance(translated_dict, dict):
+            return jsonify({"success": False, "error": "Model failed to return valid JSON dictionary", "raw_text": text}), 502
+
+        return jsonify({"success": True, "translations": translated_dict})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # -----------------------------------------------------
 #   PRICE ENDPOINTS (cache; refresh only on request)
 # -----------------------------------------------------

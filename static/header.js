@@ -243,9 +243,43 @@
     
   }catch(e){ console.error('could not load i18n.js', e) }
 
-  function applyTranslations(){
+  let geminiTranslating = false;
+  async function applyTranslations(){
     try{
       const lang = localStorage.getItem('agri_lang') || 'en';
+      if(lang !== 'en'){
+        const cacheKey = 'gemini_trans_' + lang;
+        const cached = localStorage.getItem(cacheKey);
+        if(cached){
+          try{
+            if(window._I18N && window._I18N.translations){
+              window._I18N.translations[lang] = JSON.parse(cached);
+            }
+          }catch(e){}
+        } else if(!geminiTranslating){
+          geminiTranslating = true;
+          try{
+            const enDict = (window._I18N && window._I18N.translations && window._I18N.translations['en']) || {};
+            const res = await fetch('/api/translate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ texts: enDict, target_lang: lang })
+            });
+            const j = await res.json();
+            if(j.success && j.translations){
+              if(window._I18N && window._I18N.translations){
+                window._I18N.translations[lang] = j.translations;
+              }
+              localStorage.setItem(cacheKey, JSON.stringify(j.translations));
+              applyTranslations();
+            }
+          }catch(e){
+            console.error('Gemini translate error', e);
+          }finally{
+            geminiTranslating = false;
+          }
+        }
+      }
       // translate known elements
       // translate known elements by id
       const map = {
